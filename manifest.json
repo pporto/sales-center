@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "Sales Center",
+  "version": "1.0.0",
+  "description": "Adiciona o atalho Sales Center ao Oracle Fusion HCM.",
+  "action": {
+    "default_title": "Sales Center",
+    "default_icon": {
+      "16": "assets/icons/icon-16.png",
+      "32": "assets/icons/icon-32.png",
+      "48": "assets/icons/icon-48.png",
+      "128": "assets/icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "assets/icons/icon-16.png",
+    "32": "assets/icons/icon-32.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
+  },
+  "permissions": [
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://eeho.fa.us2.oraclecloud.com/*",
+    "https://gxpap-e.oracle.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://eeho.fa.us2.oraclecloud.com/hcmUI/faces/FuseWelcome*"
+      ],
+      "css": [
+        "src/dashboard.css"
+      ],
+      "js": [
+        "src/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
