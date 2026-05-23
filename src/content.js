@@ -1245,11 +1245,25 @@ function formatResponsePreview(value) {
   }
 }
 
-function createSummaryTile(label, value) {
-  return createElement("section", { className: "sc-summary-tile" }, [
+function createSummaryTile(label, value, options = {}) {
+  const valueElement = createElement("strong", {
+    className: "sc-summary-value",
+    text: value,
+  });
+  const tile = createElement("section", { className: "sc-summary-tile" }, [
     createElement("span", { className: "sc-summary-label", text: label }),
-    createElement("strong", { className: "sc-summary-value", text: value }),
+    valueElement,
   ]);
+
+  if (Number.isFinite(options.countValue)) {
+    animateSummaryValue(
+      valueElement,
+      options.countValue,
+      options.formatter || numberFormatter,
+    );
+  }
+
+  return tile;
 }
 
 function createPlaceholderSummaryTiles(value) {
@@ -1262,10 +1276,19 @@ function createPlaceholderSummaryTiles(value) {
 
 function createEmptySummaryTiles() {
   return [
-    createSummaryTile("Opportunities", "0"),
-    createSummaryTile("Total", currencyFormatter.format(0)),
+    createSummaryTile("Opportunities", "0", {
+      countValue: 0,
+      formatter: numberFormatter,
+    }),
+    createSummaryTile("Total", currencyFormatter.format(0), {
+      countValue: 0,
+      formatter: currencyFormatter,
+    }),
     ...STATUS_SUMMARY_LABELS.map((label) =>
-      createSummaryTile(toTitleCase(label), currencyFormatter.format(0)),
+      createSummaryTile(toTitleCase(label), currencyFormatter.format(0), {
+        countValue: 0,
+        formatter: currencyFormatter,
+      }),
     ),
   ];
 }
@@ -1278,15 +1301,58 @@ function createOpportunitySummaryTiles(items) {
   );
 
   return [
-    createSummaryTile("Opportunities", numberFormatter.format(items.length)),
-    createSummaryTile("Total", currencyFormatter.format(totalBestCase)),
+    createSummaryTile("Opportunities", numberFormatter.format(items.length), {
+      countValue: items.length,
+      formatter: numberFormatter,
+    }),
+    createSummaryTile("Total", currencyFormatter.format(totalBestCase), {
+      countValue: totalBestCase,
+      formatter: currencyFormatter,
+    }),
     ...STATUS_SUMMARY_LABELS.map((label) =>
       createSummaryTile(
         toTitleCase(label),
         currencyFormatter.format(bestCaseByStatus[label] || 0),
+        {
+          countValue: bestCaseByStatus[label] || 0,
+          formatter: currencyFormatter,
+        },
       ),
     ),
   ];
+}
+
+function animateSummaryValue(element, targetValue, formatter) {
+  const duration = 700;
+  const startValue = 0;
+  const endValue = Number(targetValue);
+
+  if (
+    !Number.isFinite(endValue) ||
+    window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
+  ) {
+    element.textContent = formatter.format(Math.round(endValue || 0));
+    return;
+  }
+
+  const startedAt = performance.now();
+  const renderFrame = (timestamp) => {
+    const progress = Math.min((timestamp - startedAt) / duration, 1);
+    const easedProgress = 1 - Math.pow(1 - progress, 3);
+    const currentValue = startValue + ((endValue - startValue) * easedProgress);
+
+    element.textContent = formatter.format(Math.round(currentValue));
+
+    if (progress < 1) {
+      window.requestAnimationFrame(renderFrame);
+      return;
+    }
+
+    element.textContent = formatter.format(Math.round(endValue));
+  };
+
+  element.textContent = formatter.format(startValue);
+  window.requestAnimationFrame(renderFrame);
 }
 
 function summarizeBestCaseByStatus(items) {

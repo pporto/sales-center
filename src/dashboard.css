@@ -1036,7 +1036,9 @@
   font-size: 12px;
   line-height: 1.45;
   margin: 0;
-  white-space: normal;
+  overflow-wrap: break-word;
+  white-space: pre-line;
+  word-break: normal;
 }
 
 .sc-token {
