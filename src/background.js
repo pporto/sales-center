@@ -1,8 +1,5 @@
 "use strict";
 
-const directView = "LAD_X-RDAFONSE_Sales Manager_BR PS Tech Grow_SH";
-globalThis.directView = directView;
-
 const API_ORIGIN = "https://gxpap-e.oracle.com";
 const API_BASE = `${API_ORIGIN}/oalcrm/web/SalesForecastServices-GEC`;
 const SALES_CLOUD_BOOTSTRAP_URL = `${API_ORIGIN}/`;
@@ -87,7 +84,6 @@ async function fetchCurrentQuarter(sessionContext) {
 
     return {
       debug: requestContext.debug,
-      directView,
       forecast,
       forecastCount: forecasts.length,
       generatedAt: new Date().toISOString(),
@@ -392,7 +388,7 @@ function createRevenuePayload(forecast, offset, options = {}) {
       : {}),
     myDirectsResourcesMinusOne: [],
     myDirectsResourcesMinusTwo: [],
-    myDirectsTerritoriesMinusOne: [directView],
+    myDirectsTerritoriesMinusOne: [],
     myDirectsTerritoriesMinusTwo: [],
     offset,
     optyStatus: [],
@@ -1521,7 +1517,6 @@ async function refreshSalesCloudFrame(requestContext, details) {
 
 function createDebugState(sessionContext) {
   return {
-    directView,
     frameName: sessionContext.frameName || null,
     generatedAt: new Date().toISOString(),
     period: normalizePeriod(sessionContext.period),
