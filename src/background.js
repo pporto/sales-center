@@ -31,6 +31,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     period: normalizePeriod(message.period),
     tabId: sender.tab?.id,
     techCloudView: message.techCloudView === true,
+    territoryIds: normalizeTerritoryIds(message.territoryIds),
   })
     .then((data) => sendResponse({ data, ok: true }))
     .catch((error) => {
@@ -58,6 +59,7 @@ async function fetchCurrentQuarter(sessionContext) {
     frameId: null,
     period: normalizePeriod(sessionContext.period),
     renewalForecast: normalizePeriod(sessionContext.period) === PERIOD_RENEWALS,
+    selectedTerritoryIds: normalizeTerritoryIds(sessionContext.territoryIds),
     tabId: sessionContext.tabId,
     temporarySalesCloudTabId: null,
     techCloudView: sessionContext.techCloudView === true,
@@ -75,7 +77,26 @@ async function fetchCurrentQuarter(sessionContext) {
       );
     }
 
-    const activeForecast = forecasts[0];
+    const revenueForecasts = forecasts.filter(isRevenueForecast);
+
+    if (revenueForecasts.length === 0) {
+      throw new SalesCenterRequestError(
+        "Forecast ACTIVE nÃ£o retornou registros REVENUE para Current Quarter.",
+        404,
+        requestContext.debug,
+      );
+    }
+
+    const forecastActiveOptions = createForecastActiveOptions(revenueForecasts);
+    const selectedTerritoryIds = selectTerritoryIds(
+      forecastActiveOptions,
+      requestContext.selectedTerritoryIds,
+    );
+    const activeForecast = selectActiveForecast(
+      revenueForecasts,
+      selectedTerritoryIds,
+    );
+    requestContext.selectedTerritoryIds = selectedTerritoryIds;
     const forecast = await resolveForecastForPeriod(requestContext, activeForecast);
     const revenueResult = await requestRevenueItemsPaginated(
       requestContext,
@@ -85,11 +106,13 @@ async function fetchCurrentQuarter(sessionContext) {
     return {
       debug: requestContext.debug,
       forecast,
-      forecastCount: forecasts.length,
+      forecastActiveOptions,
+      forecastCount: revenueForecasts.length,
       generatedAt: new Date().toISOString(),
       items: revenueResult.items,
       pageCount: revenueResult.pageCount,
       period: requestContext.period,
+      selectedTerritoryIds,
     };
   } finally {
     await closeTemporarySalesCloudTab(requestContext);
@@ -106,6 +129,74 @@ async function requestForecastActive(requestContext) {
     },
     method: "GET",
   });
+}
+
+function isRevenueForecast(forecast) {
+  return String(forecast?.forecastType || "").trim().toUpperCase() === "REVENUE";
+}
+
+function createForecastActiveOptions(forecasts) {
+  const uniqueOptions = [];
+  const seenTerritoryIds = new Set();
+
+  for (const forecast of forecasts) {
+    const territoryId = normalizeTerritoryId(forecast.territoryId);
+
+    if (!territoryId || seenTerritoryIds.has(territoryId)) {
+      continue;
+    }
+
+    seenTerritoryIds.add(territoryId);
+    uniqueOptions.push({
+      forecastHeaderId: forecast.forecastHeaderId ?? null,
+      forecastType: forecast.forecastType ?? null,
+      territoryId,
+      territoryName: forecast.territoryName || "-",
+    });
+  }
+
+  return uniqueOptions;
+}
+
+function selectTerritoryIds(options, requestedTerritoryIds) {
+  const availableTerritoryIds = options.map((option) => option.territoryId);
+  const availableTerritoryIdSet = new Set(availableTerritoryIds);
+  const selectedTerritoryIds = requestedTerritoryIds.filter((territoryId) =>
+    availableTerritoryIdSet.has(territoryId),
+  );
+
+  return selectedTerritoryIds.length > 0
+    ? selectedTerritoryIds
+    : availableTerritoryIds.slice(0, 1);
+}
+
+function selectActiveForecast(forecasts, selectedTerritoryIds) {
+  if (!selectedTerritoryIds.length) {
+    return forecasts[0];
+  }
+
+  const selectedTerritoryIdSet = new Set(selectedTerritoryIds);
+  return forecasts.find((forecast) =>
+    selectedTerritoryIdSet.has(normalizeTerritoryId(forecast.territoryId)),
+  ) || forecasts[0];
+}
+
+function normalizeTerritoryIds(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(value.map(normalizeTerritoryId).filter(Boolean)),
+  );
+}
+
+function normalizeTerritoryId(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  return String(value).trim();
 }
 
 async function requestNextQuarter(requestContext, activeForecast) {
@@ -363,6 +454,7 @@ async function requestRevenueItems(requestContext, forecast, offset) {
     body: JSON.stringify(
       createRevenuePayload(forecast, offset, {
         renewalForecast: requestContext.renewalForecast,
+        selectedTerritoryIds: requestContext.selectedTerritoryIds,
         techCloudView: requestContext.techCloudView,
       }),
     ),
@@ -414,7 +506,7 @@ function createRevenuePayload(forecast, offset, options = {}) {
     splitPercentFrom: null,
     splitPercentTo: null,
     splitTypeCode: [],
-    territoryIds: createTerritoryIdsPayload(forecast),
+    territoryIds: createTerritoryIdsPayload(forecast, options.selectedTerritoryIds),
     winProbability: [],
   };
 
@@ -442,7 +534,16 @@ function createForecastHeadersPayload(forecast) {
   });
 }
 
-function createTerritoryIdsPayload(forecast) {
+function createTerritoryIdsPayload(forecast, selectedTerritoryIds = []) {
+  const normalizedSelectedTerritoryIds = normalizeTerritoryIds(selectedTerritoryIds);
+
+  if (normalizedSelectedTerritoryIds.length > 0) {
+    return normalizedSelectedTerritoryIds.map((territoryId) => {
+      const numericTerritoryId = Number(territoryId);
+      return Number.isFinite(numericTerritoryId) ? numericTerritoryId : territoryId;
+    });
+  }
+
   const headers = Array.isArray(forecast.forecastHeaders)
     ? forecast.forecastHeaders
     : [forecast];

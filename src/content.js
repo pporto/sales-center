@@ -296,14 +296,17 @@ function openSalesCenterDashboard() {
   document.body.classList.add("sc-dashboard-open");
 
   const state = renderDashboardShell(panel);
-  const handleSellerOutsideClick = (event) => {
+  const handleFilterOutsideClick = (event) => {
     if (!state.sellerFilterRoot.contains(event.target)) {
       setSellerFilterExpanded(state, false);
+    }
+    if (!state.territoryFilterRoot.contains(event.target)) {
+      setTerritoryFilterExpanded(state, false);
     }
   };
   const closeDashboard = () => {
     document.removeEventListener("keydown", handleEscape);
-    document.removeEventListener("click", handleSellerOutsideClick);
+    document.removeEventListener("click", handleFilterOutsideClick);
     overlay.remove();
     document.body.classList.remove("sc-dashboard-open");
     activeDashboard = null;
@@ -318,7 +321,7 @@ function openSalesCenterDashboard() {
   state.closeButton.addEventListener("click", closeDashboard);
   backdrop.addEventListener("click", closeDashboard);
   document.addEventListener("keydown", handleEscape);
-  document.addEventListener("click", handleSellerOutsideClick);
+  document.addEventListener("click", handleFilterOutsideClick);
 
   state.periodSelect.addEventListener("change", () => {
     if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
@@ -327,6 +330,25 @@ function openSalesCenterDashboard() {
     }
 
     renderComingSoon(state, state.periodSelect.value);
+  });
+  state.territoryFilterButton.addEventListener("click", () => {
+    const isExpanded = state.territoryFilterButton.getAttribute("aria-expanded") === "true";
+    setTerritoryFilterExpanded(state, !isExpanded);
+  });
+  state.territoryFilterPanel.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
+  state.territoryAllButton.addEventListener("click", () => {
+    state.selectedTerritoryIds = new Set(
+      state.availableTerritories.map((territory) => territory.territoryId),
+    );
+    syncTerritoryFilterControls(state);
+    handleTerritorySelectionChanged(state);
+  });
+  state.territoryNoneButton.addEventListener("click", () => {
+    state.selectedTerritoryIds = new Set();
+    syncTerritoryFilterControls(state);
+    handleTerritorySelectionChanged(state);
   });
   state.refreshButton.addEventListener("click", () => {
     if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
@@ -449,7 +471,6 @@ function renderDashboardShell(panel) {
       }),
     );
   }
-
   const refreshButton = createElement("button", {
     attributes: { type: "button" },
     className: "sc-button",
@@ -532,6 +553,39 @@ function renderDashboardShell(panel) {
     sellerFilterButton,
     sellerFilterPanel,
   ]);
+  const territoryFilterButton = createElement("button", {
+    attributes: {
+      "aria-expanded": "false",
+      type: "button",
+    },
+    className: "sc-multiselect-button",
+    text: "Território: Carregando",
+  });
+  const territoryAllButton = createElement("button", {
+    attributes: { type: "button" },
+    className: "sc-filter-action",
+    text: "Marcar todos",
+  });
+  const territoryNoneButton = createElement("button", {
+    attributes: { type: "button" },
+    className: "sc-filter-action",
+    text: "Desmarcar todos",
+  });
+  const territoryFilterList = createElement("div", { className: "sc-multiselect-list" });
+  const territoryFilterPanel = createElement("div", {
+    attributes: { hidden: "" },
+    className: "sc-multiselect-panel",
+  }, [
+    createElement("div", { className: "sc-filter-actions" }, [
+      territoryAllButton,
+      territoryNoneButton,
+    ]),
+    territoryFilterList,
+  ]);
+  const territoryFilterRoot = createElement("div", { className: "sc-multiselect" }, [
+    territoryFilterButton,
+    territoryFilterPanel,
+  ]);
   const toolbar = createElement("div", { className: "sc-toolbar" }, [
     createElement("label", {
       attributes: { for: "sales-center-period" },
@@ -539,6 +593,11 @@ function renderDashboardShell(panel) {
       text: "Período",
     }),
     periodSelect,
+    createElement("label", {
+      className: "sc-field",
+      text: "Território",
+    }),
+    territoryFilterRoot,
     techCloudField,
     workloadTypeGroup,
     sellerFilterRoot,
@@ -651,8 +710,16 @@ function renderDashboardShell(panel) {
     tableState,
     techCloudSwitch,
     tableWrap,
+    territoryAllButton,
+    territoryFilterButton,
+    territoryFilterList,
+    territoryFilterPanel,
+    territoryFilterRoot,
+    territoryNoneButton,
     availableSellers: [],
+    availableTerritories: [],
     selectedSellers: new Set(),
+    selectedTerritoryIds: new Set(),
     workloadsToggle,
   };
 }
@@ -677,6 +744,124 @@ function togglePressedState(button) {
 function setSellerFilterExpanded(state, expanded) {
   state.sellerFilterButton.setAttribute("aria-expanded", String(expanded));
   state.sellerFilterPanel.hidden = !expanded;
+}
+
+function setTerritoryFilterExpanded(state, expanded) {
+  state.territoryFilterButton.setAttribute("aria-expanded", String(expanded));
+  state.territoryFilterPanel.hidden = !expanded;
+}
+
+function renderTerritoryFilterOptions(state) {
+  state.territoryFilterList.replaceChildren();
+
+  if (state.availableTerritories.length === 0) {
+    state.territoryFilterList.appendChild(
+      createElement("div", {
+        className: "sc-multiselect-empty",
+        text: "Nenhum território",
+      }),
+    );
+    syncTerritoryFilterControls(state);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+
+  for (const territory of state.availableTerritories) {
+    const input = createElement("input", {
+      attributes: {
+        checked: "",
+        type: "checkbox",
+        value: territory.territoryId,
+      },
+      className: "sc-checkbox-input",
+    });
+    input.addEventListener("change", () => {
+      if (input.checked) {
+        state.selectedTerritoryIds.add(territory.territoryId);
+      } else {
+        state.selectedTerritoryIds.delete(territory.territoryId);
+      }
+
+      syncTerritoryFilterControls(state);
+      handleTerritorySelectionChanged(state);
+    });
+
+    fragment.appendChild(
+      createElement("label", { className: "sc-checkbox-row" }, [
+        input,
+        createElement("span", { text: territory.territoryName }),
+      ]),
+    );
+  }
+
+  state.territoryFilterList.appendChild(fragment);
+  syncTerritoryFilterControls(state);
+}
+
+function syncTerritoryFilterControls(state) {
+  for (const input of state.territoryFilterList.querySelectorAll("input[type='checkbox']")) {
+    input.checked = state.selectedTerritoryIds.has(input.value);
+  }
+
+  updateTerritoryFilterButtonLabel(state);
+}
+
+function updateTerritoryFilterButtonLabel(state) {
+  const selectedCount = state.selectedTerritoryIds.size;
+  const totalCount = state.availableTerritories.length;
+  const selectedTerritories = getSelectedTerritoryNames(state);
+
+  state.territoryFilterButton.removeAttribute("title");
+
+  if (totalCount === 0) {
+    state.territoryFilterButton.textContent = "Território: Carregando";
+    state.territoryFilterButton.setAttribute("aria-label", "Filtro de território carregando");
+    return;
+  }
+
+  if (selectedCount === 0) {
+    state.territoryFilterButton.textContent = "Território: Nenhum";
+    state.territoryFilterButton.setAttribute("aria-label", "Filtro de território: nenhum");
+    return;
+  }
+
+  if (selectedCount === 1) {
+    const territoryName = selectedTerritories[0] || "-";
+    state.territoryFilterButton.textContent = `Território: ${territoryName}`;
+    state.territoryFilterButton.setAttribute(
+      "aria-label",
+      `Filtro de território: ${territoryName}`,
+    );
+    return;
+  }
+
+  state.territoryFilterButton.textContent =
+    selectedCount === totalCount ? "Território: Todos" : `Território: ${selectedCount}`;
+  state.territoryFilterButton.setAttribute(
+    "aria-label",
+    `Filtro de território: ${selectedCount} selecionados`,
+  );
+  state.territoryFilterButton.setAttribute("title", selectedTerritories.join("\n"));
+}
+
+function getSelectedTerritoryNames(state) {
+  return state.availableTerritories
+    .filter((territory) => state.selectedTerritoryIds.has(territory.territoryId))
+    .map((territory) => territory.territoryName || "-");
+}
+
+function handleTerritorySelectionChanged(state) {
+  if (!isLoadableSalesCenterPeriod(state.periodSelect.value)) {
+    return;
+  }
+
+  if (state.availableTerritories.length > 0 && state.selectedTerritoryIds.size === 0) {
+    renderNoTerritoriesSelected(state);
+    return;
+  }
+
+  loadCurrentQuarter(state);
 }
 
 function renderSellerFilterOptions(state, items) {
@@ -885,6 +1070,11 @@ function isLoadableSalesCenterPeriod(period) {
 }
 
 async function loadCurrentQuarter(state) {
+  if (state.availableTerritories.length > 0 && state.selectedTerritoryIds.size === 0) {
+    renderNoTerritoriesSelected(state);
+    return;
+  }
+
   renderLoading(state);
 
   try {
@@ -893,6 +1083,7 @@ async function loadCurrentQuarter(state) {
       frameName: state.frameName,
       period: state.periodSelect.value,
       techCloudView: state.techCloudSwitch.checked,
+      territoryIds: Array.from(state.selectedTerritoryIds || []),
       type: "salesCenter.fetchCurrentQuarter",
     });
 
@@ -972,6 +1163,20 @@ function renderNoSellersSelected(state) {
   renderEmptyRows(state, "Nenhum vendedor selecionado.");
 }
 
+function renderNoTerritoriesSelected(state) {
+  setStatusPill(state, "Empty", "muted");
+  state.summaryGrid.replaceChildren(
+    ...createEmptySummaryTiles(),
+  );
+  state.statusRegion.replaceChildren(
+    createElement("div", {
+      className: "sc-inline-status",
+      text: "Selecione ao menos um território para carregar oportunidades.",
+    }),
+  );
+  renderEmptyRows(state, "Nenhum território selecionado.");
+}
+
 function renderNoStatusesSelected(state) {
   setStatusPill(state, "Empty", "muted");
   state.summaryGrid.replaceChildren(
@@ -992,9 +1197,53 @@ function renderDashboardData(state, data) {
   state.currentDebug = data?.debug || null;
   state.tableState.allItems = items;
   state.tableState.expandedRows.clear();
+  renderForecastActiveTerritoryOptions(state, data);
   renderRevenueRequestInspector(state, data?.debug);
   renderSellerFilterOptions(state, items);
   applyWorkloadTypeFilter(state);
+}
+
+function renderForecastActiveTerritoryOptions(state, data) {
+  const options = Array.isArray(data?.forecastActiveOptions)
+    ? data.forecastActiveOptions
+    : [];
+
+  if (!options.length) {
+    state.availableTerritories = [];
+    state.selectedTerritoryIds = new Set();
+    state.territoryFilterList.replaceChildren(
+      createElement("div", {
+        className: "sc-multiselect-empty",
+        text: "Nenhum território",
+      }),
+    );
+    syncTerritoryFilterControls(state);
+    return;
+  }
+
+  const availableTerritories = options.map((option) => ({
+    territoryId: String(option.territoryId ?? "").trim(),
+    territoryName: option.territoryName || "-",
+  })).filter((option) => option.territoryId);
+  const availableTerritoryIdSet = new Set(
+    availableTerritories.map((territory) => territory.territoryId),
+  );
+  const previousSelectedTerritoryIds = Array.from(state.selectedTerritoryIds || [])
+    .filter((territoryId) => availableTerritoryIdSet.has(territoryId));
+  const responseSelectedTerritoryIds = Array.isArray(data?.selectedTerritoryIds)
+    ? data.selectedTerritoryIds.map((territoryId) => String(territoryId).trim())
+      .filter((territoryId) => availableTerritoryIdSet.has(territoryId))
+    : [];
+
+  state.availableTerritories = availableTerritories;
+  state.selectedTerritoryIds = new Set(
+    previousSelectedTerritoryIds.length > 0
+      ? previousSelectedTerritoryIds
+      : responseSelectedTerritoryIds.length > 0
+        ? responseSelectedTerritoryIds
+        : availableTerritories.slice(0, 1).map((territory) => territory.territoryId),
+  );
+  renderTerritoryFilterOptions(state);
 }
 
 function applyWorkloadTypeFilter(state) {
@@ -1006,6 +1255,11 @@ function applyWorkloadTypeFilter(state) {
 
   if (selectedTypes.length === 0) {
     renderNoWorkloadTypesSelected(state);
+    return;
+  }
+
+  if (state.availableTerritories.length > 0 && state.selectedTerritoryIds.size === 0) {
+    renderNoTerritoriesSelected(state);
     return;
   }
 
