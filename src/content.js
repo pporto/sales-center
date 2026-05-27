@@ -6,6 +6,7 @@ const SALES_CENTER_CARD_ID = "c_5c719a88b5624b1eaf81defe2c2er3t6";
 const SALES_CENTER_ORIGIN_URL =
   "https://eeho.fa.us2.oraclecloud.com/hcmUI/faces/FuseWelcome";
 const SALES_CENTER_OVERLAY_ID = "sales-center-dashboard-overlay";
+const SALES_CENTER_THEME_STORAGE_KEY = "salesCenterDashboardTheme";
 const SALES_CENTER_CURRENT_QUARTER = "Current Quarter";
 const SALES_CENTER_NEXT_QUARTER = "Next Quarter";
 const SALES_CENTER_PREVIOUS_QUARTER = "Previous Quarter";
@@ -136,15 +137,9 @@ const TABLE_COLUMNS = [
     aliases: ["crmCurrCode"],
   },
   {
-    key: "amount",
-    label: "Amount",
-    aliases: ["revnRevenueAmount"],
-    type: "number",
-  },
-  {
-    key: "bestCase",
-    label: "Best Case",
-    aliases: ["bestCase"],
+    key: "value",
+    label: "Valor",
+    aliases: ["bestCase", "acr"],
     type: "number",
   },
   {
@@ -214,6 +209,94 @@ function createElement(tagName, options = {}, children = []) {
   }
 
   return element;
+}
+
+function createSvgElement(tagName, attributes = {}, children = []) {
+  const element = document.createElementNS("http://www.w3.org/2000/svg", tagName);
+
+  for (const [name, value] of Object.entries(attributes)) {
+    element.setAttribute(name, value);
+  }
+
+  for (const child of children) {
+    element.appendChild(child);
+  }
+
+  return element;
+}
+
+function createThemeToggleIcons() {
+  const iconAttributes = {
+    "aria-hidden": "true",
+    fill: "none",
+    height: "18",
+    stroke: "currentColor",
+    "stroke-linecap": "round",
+    "stroke-linejoin": "round",
+    "stroke-width": "2",
+    viewBox: "0 0 24 24",
+    width: "18",
+  };
+
+  return [
+    createSvgElement("svg", {
+      ...iconAttributes,
+      class: "sc-theme-icon sc-theme-icon-moon",
+    }, [
+      createSvgElement("path", {
+        d: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z",
+      }),
+    ]),
+    createSvgElement("svg", {
+      ...iconAttributes,
+      class: "sc-theme-icon sc-theme-icon-sun",
+    }, [
+      createSvgElement("circle", { cx: "12", cy: "12", r: "4" }),
+      createSvgElement("line", { x1: "12", x2: "12", y1: "2", y2: "4" }),
+      createSvgElement("line", { x1: "12", x2: "12", y1: "20", y2: "22" }),
+      createSvgElement("line", { x1: "4.93", x2: "6.34", y1: "4.93", y2: "6.34" }),
+      createSvgElement("line", { x1: "17.66", x2: "19.07", y1: "17.66", y2: "19.07" }),
+      createSvgElement("line", { x1: "2", x2: "4", y1: "12", y2: "12" }),
+      createSvgElement("line", { x1: "20", x2: "22", y1: "12", y2: "12" }),
+      createSvgElement("line", { x1: "4.93", x2: "6.34", y1: "19.07", y2: "17.66" }),
+      createSvgElement("line", { x1: "17.66", x2: "19.07", y1: "6.34", y2: "4.93" }),
+    ]),
+  ];
+}
+
+function getSavedDashboardTheme() {
+  try {
+    return localStorage.getItem(SALES_CENTER_THEME_STORAGE_KEY) === "dark"
+      ? "dark"
+      : "light";
+  } catch (error) {
+    return "light";
+  }
+}
+
+function saveDashboardTheme(theme) {
+  try {
+    localStorage.setItem(SALES_CENTER_THEME_STORAGE_KEY, theme);
+  } catch (error) {
+    return;
+  }
+}
+
+function applyDashboardTheme(state, theme) {
+  const normalizedTheme = theme === "dark" ? "dark" : "light";
+  const isDark = normalizedTheme === "dark";
+
+  state.overlay.classList.toggle("sc-theme-dark", isDark);
+  state.overlay.dataset.theme = normalizedTheme;
+  state.themeToggleButton.setAttribute("aria-pressed", String(isDark));
+  state.themeToggleButton.setAttribute(
+    "aria-label",
+    isDark ? "Alternar para tema claro" : "Alternar para tema escuro",
+  );
+  state.themeToggleButton.setAttribute(
+    "title",
+    isDark ? "Alternar para tema claro" : "Alternar para tema escuro",
+  );
 }
 
 function findSalesCenterCard(groupNode) {
@@ -296,6 +379,8 @@ function openSalesCenterDashboard() {
   document.body.classList.add("sc-dashboard-open");
 
   const state = renderDashboardShell(panel);
+  state.overlay = overlay;
+  applyDashboardTheme(state, getSavedDashboardTheme());
   const handleFilterOutsideClick = (event) => {
     if (!state.sellerFilterRoot.contains(event.target)) {
       setSellerFilterExpanded(state, false);
@@ -305,22 +390,35 @@ function openSalesCenterDashboard() {
     }
   };
   const closeDashboard = () => {
-    document.removeEventListener("keydown", handleEscape);
+    document.removeEventListener("keydown", handleDashboardKeydown);
     document.removeEventListener("click", handleFilterOutsideClick);
     overlay.remove();
     document.body.classList.remove("sc-dashboard-open");
     activeDashboard = null;
   };
-  const handleEscape = (event) => {
+  const handleDashboardKeydown = (event) => {
     if (event.key === "Escape") {
       closeDashboard();
+      return;
+    }
+
+    if (event.ctrlKey && event.altKey && event.key.toLowerCase() === "d") {
+      event.preventDefault();
+      toggleDebugButtonVisibility(state);
     }
   };
 
   activeDashboard = { close: closeDashboard, state };
   state.closeButton.addEventListener("click", closeDashboard);
+  state.themeToggleButton.addEventListener("click", () => {
+    const nextTheme = state.overlay.classList.contains("sc-theme-dark")
+      ? "light"
+      : "dark";
+    applyDashboardTheme(state, nextTheme);
+    saveDashboardTheme(nextTheme);
+  });
   backdrop.addEventListener("click", closeDashboard);
-  document.addEventListener("keydown", handleEscape);
+  document.addEventListener("keydown", handleDashboardKeydown);
   document.addEventListener("click", handleFilterOutsideClick);
 
   state.periodSelect.addEventListener("change", () => {
@@ -361,13 +459,13 @@ function openSalesCenterDashboard() {
     }
   });
   state.bookingToggle.addEventListener("click", () => {
-    togglePressedState(state.bookingToggle);
+    toggleWorkloadTypeFilterSelection(state, WORKLOAD_TYPE_BOOKING);
     if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
       applyWorkloadTypeFilter(state);
     }
   });
   state.workloadsToggle.addEventListener("click", () => {
-    togglePressedState(state.workloadsToggle);
+    toggleWorkloadTypeFilterSelection(state, WORKLOAD_TYPE_WORKLOAD);
     if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
       applyWorkloadTypeFilter(state);
     }
@@ -380,17 +478,7 @@ function openSalesCenterDashboard() {
   });
   for (const statusToggle of state.statusToggles) {
     statusToggle.addEventListener("click", () => {
-      const wasAllSelected = state.statusAllToggle.getAttribute("aria-pressed") === "true";
-      if (wasAllSelected) {
-        for (const toggle of state.statusToggles) {
-          toggle.setAttribute("aria-pressed", "false");
-        }
-        statusToggle.setAttribute("aria-pressed", "true");
-      } else {
-        togglePressedState(statusToggle);
-      }
-
-      state.statusAllToggle.setAttribute("aria-pressed", "false");
+      toggleStatusFilterSelection(state, statusToggle.dataset.status);
       if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
         applyWorkloadTypeFilter(state);
       }
@@ -449,12 +537,26 @@ function renderDashboardShell(panel) {
   ]);
   const closeButton = createElement("button", {
     attributes: { "aria-label": "Fechar dashboard", type: "button" },
-    className: "sc-icon-button",
-    text: "x",
-  });
+    className: "sc-icon-button sc-close-button",
+  }, [
+    createElement("span", {
+      attributes: { "aria-hidden": "true" },
+      className: "sc-close-icon",
+    }),
+  ]);
+  const themeToggleButton = createElement("button", {
+    attributes: {
+      "aria-label": "Alternar para tema escuro",
+      "aria-pressed": "false",
+      title: "Alternar para tema escuro",
+      type: "button",
+    },
+    className: "sc-icon-button sc-theme-toggle",
+  }, createThemeToggleIcons());
   const header = createElement("header", { className: "sc-header" }, [
     titleBlock,
     createElement("div", { className: "sc-header-actions" }, [
+      themeToggleButton,
       closeButton,
     ]),
   ]);
@@ -473,10 +575,11 @@ function renderDashboardShell(panel) {
   }
   const refreshButton = createElement("button", {
     attributes: { type: "button" },
-    className: "sc-button",
+    className: "sc-button sc-refresh-button",
     text: "Refresh",
   });
   const debugToggle = createToggleButton("Debug", false, "debug");
+  debugToggle.hidden = true;
   const techCloudSwitch = createElement("input", {
     attributes: {
       id: "sales-center-tech-cloud-view",
@@ -620,7 +723,7 @@ function renderDashboardShell(panel) {
     expandedRows: new Set(),
     items: [],
     sortDirection: "desc",
-    sortKey: "amount",
+    sortKey: "value",
     tableBody: null,
     tableHead: null,
     tableWrap: null,
@@ -710,6 +813,7 @@ function renderDashboardShell(panel) {
     tableState,
     techCloudSwitch,
     tableWrap,
+    themeToggleButton,
     territoryAllButton,
     territoryFilterButton,
     territoryFilterList,
@@ -739,6 +843,15 @@ function createToggleButton(label, pressed, tone, dataset = {}) {
 function togglePressedState(button) {
   const nextPressed = button.getAttribute("aria-pressed") !== "true";
   button.setAttribute("aria-pressed", String(nextPressed));
+}
+
+function toggleDebugButtonVisibility(state) {
+  state.debugToggle.hidden = !state.debugToggle.hidden;
+
+  if (state.debugToggle.hidden) {
+    state.debugToggle.setAttribute("aria-pressed", "false");
+    clearRevenueRequestInspector(state);
+  }
 }
 
 function setSellerFilterExpanded(state, expanded) {
@@ -1121,6 +1234,67 @@ function setStatusFilterAllSelected(state) {
   state.statusAllToggle.setAttribute("aria-pressed", "true");
   for (const statusToggle of state.statusToggles) {
     statusToggle.setAttribute("aria-pressed", "true");
+  }
+}
+
+function toggleStatusFilterSelection(state, selectedStatus) {
+  const wasAllSelected = state.statusAllToggle.getAttribute("aria-pressed") === "true";
+  const selectedToggle = state.statusToggles.find(
+    (statusToggle) => statusToggle.dataset.status === selectedStatus,
+  );
+
+  if (!selectedToggle) {
+    return;
+  }
+
+  if (wasAllSelected) {
+    for (const statusToggle of state.statusToggles) {
+      statusToggle.setAttribute(
+        "aria-pressed",
+        String(statusToggle === selectedToggle),
+      );
+    }
+    state.statusAllToggle.setAttribute("aria-pressed", "false");
+    return;
+  }
+
+  const isSelected = selectedToggle.getAttribute("aria-pressed") === "true";
+  const selectedCount = state.statusToggles.filter(
+    (statusToggle) => statusToggle.getAttribute("aria-pressed") === "true",
+  ).length;
+
+  if (!isSelected) {
+    selectedToggle.setAttribute("aria-pressed", "true");
+  } else if (selectedCount > 1) {
+    selectedToggle.setAttribute("aria-pressed", "false");
+  }
+
+  const nextSelectedCount = state.statusToggles.filter(
+    (statusToggle) => statusToggle.getAttribute("aria-pressed") === "true",
+  ).length;
+  state.statusAllToggle.setAttribute(
+    "aria-pressed",
+    String(nextSelectedCount === state.statusToggles.length),
+  );
+}
+
+function toggleWorkloadTypeFilterSelection(state, selectedType) {
+  const selectedToggle = selectedType === WORKLOAD_TYPE_BOOKING
+    ? state.bookingToggle
+    : state.workloadsToggle;
+  const otherToggle = selectedType === WORKLOAD_TYPE_BOOKING
+    ? state.workloadsToggle
+    : state.bookingToggle;
+  const isSelected = selectedToggle.getAttribute("aria-pressed") === "true";
+  const isOtherSelected = otherToggle.getAttribute("aria-pressed") === "true";
+
+  if (!isSelected) {
+    selectedToggle.setAttribute("aria-pressed", "true");
+    return;
+  }
+
+  if (isOtherSelected) {
+    selectedToggle.setAttribute("aria-pressed", "false");
   }
 }
 
@@ -1548,9 +1722,9 @@ function createEmptySummaryTiles() {
 }
 
 function createOpportunitySummaryTiles(items) {
-  const bestCaseByStatus = summarizeBestCaseByStatus(items);
-  const totalBestCase = STATUS_SUMMARY_LABELS.reduce(
-    (total, label) => total + (bestCaseByStatus[label] || 0),
+  const valueByStatus = summarizeValueByStatus(items);
+  const totalValue = STATUS_SUMMARY_LABELS.reduce(
+    (total, label) => total + (valueByStatus[label] || 0),
     0,
   );
 
@@ -1559,16 +1733,16 @@ function createOpportunitySummaryTiles(items) {
       countValue: items.length,
       formatter: numberFormatter,
     }),
-    createSummaryTile("Total", currencyFormatter.format(totalBestCase), {
-      countValue: totalBestCase,
+    createSummaryTile("Total", currencyFormatter.format(totalValue), {
+      countValue: totalValue,
       formatter: currencyFormatter,
     }),
     ...STATUS_SUMMARY_LABELS.map((label) =>
       createSummaryTile(
         toTitleCase(label),
-        currencyFormatter.format(bestCaseByStatus[label] || 0),
+        currencyFormatter.format(valueByStatus[label] || 0),
         {
-          countValue: bestCaseByStatus[label] || 0,
+          countValue: valueByStatus[label] || 0,
           formatter: currencyFormatter,
         },
       ),
@@ -1609,7 +1783,7 @@ function animateSummaryValue(element, targetValue, formatter) {
   window.requestAnimationFrame(renderFrame);
 }
 
-function summarizeBestCaseByStatus(items) {
+function summarizeValueByStatus(items) {
   return items.reduce((summary, item) => {
     const status = getStatusTextByWinProbability(getRevenueWinProbability(item));
 
@@ -1617,13 +1791,32 @@ function summarizeBestCaseByStatus(items) {
       return summary;
     }
 
-    const bestCase = Number(String(findValueByAliases(item, ["bestCase"]) ?? "").replace(/,/g, ""));
-    summary[status] += Number.isFinite(bestCase) ? bestCase : 0;
+    summary[status] += getCalculatedValueAmount(item);
     return summary;
   }, STATUS_SUMMARY_LABELS.reduce((summary, label) => {
     summary[label] = 0;
     return summary;
   }, {}));
+}
+
+function getCalculatedValueAmount(item) {
+  const workloadType = String(findValueByAliases(item, ["workloadType"]) || "")
+    .trim()
+    .toUpperCase();
+  const value = workloadType === WORKLOAD_TYPE_WORKLOAD
+    ? findValueByAliases(item, ["acr"])
+    : findValueByAliases(item, ["bestCase"]);
+
+  return parseNumberValue(value);
+}
+
+function parseNumberValue(value) {
+  if (value === undefined || value === null || value === "") {
+    return 0;
+  }
+
+  const numberValue = Number(String(value).replace(/,/g, ""));
+  return Number.isFinite(numberValue) ? numberValue : 0;
 }
 
 function toTitleCase(value) {
@@ -1723,6 +1916,11 @@ function renderOpportunityCell(cell, item, column, tableState) {
 
   if (column.key === "channel") {
     renderChannelCell(cell, item, column);
+    return;
+  }
+
+  if (column.key === "value") {
+    cell.textContent = formatAmountValue(getCalculatedValueAmount(item));
     return;
   }
 
@@ -2177,6 +2375,10 @@ function getSortValue(item, column) {
   if (column.key === "status") {
     const probability = getRevenueWinProbability(item, column.aliases);
     return probability === null ? "" : probability;
+  }
+
+  if (column.key === "value") {
+    return getCalculatedValueAmount(item);
   }
 
   const rawValue = findValueByAliases(item, column.aliases);
