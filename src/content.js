@@ -126,7 +126,7 @@ const TABLE_COLUMNS = [
   {
     key: "value",
     label: "Valor",
-    aliases: ["bestCase", "acr"],
+    aliases: ["revnRevenueAmount", "acr"],
     type: "number",
   },
   {
@@ -2227,7 +2227,7 @@ function getCalculatedValueAmount(item) {
     .toUpperCase();
   const value = workloadType === WORKLOAD_TYPE_WORKLOAD
     ? findValueByAliases(item, ["acr"])
-    : findValueByAliases(item, ["bestCase"]);
+    : findValueByAliases(item, ["revnRevenueAmount"]);
 
   return parseNumberValue(value);
 }
