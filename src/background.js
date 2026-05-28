@@ -5,8 +5,10 @@ const API_BASE = `${API_ORIGIN}/oalcrm/web/SalesForecastServices-GEC`;
 const SALES_CLOUD_BOOTSTRAP_URL = `${API_ORIGIN}/`;
 const SALES_CLOUD_REFERER = `${API_ORIGIN}/oalcrm/web/SalesCloudSMC-GEC/`;
 const REQUEST_VERSION_SUFFIX = "-01-30T163200.068Z";
-const REVENUE_PAGE_LIMIT = 20;
+const REVENUE_PAGE_LIMIT = 100;
 const MAX_REVENUE_PAGES = 500;
+const REVENUE_PROGRESS_START = 32;
+const REVENUE_PROGRESS_END = 96;
 const PERIOD_CURRENT_QUARTER = "Current Quarter";
 const PERIOD_NEXT_QUARTER = "Next Quarter";
 const PERIOD_PREVIOUS_QUARTER = "Previous Quarter";
@@ -29,6 +31,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   fetchCurrentQuarter({
     frameName: message.frameName,
     period: normalizePeriod(message.period),
+    progressRequestId: message.progressRequestId || null,
     tabId: sender.tab?.id,
     techCloudView: message.techCloudView === true,
     territoryIds: normalizeTerritoryIds(message.territoryIds),
@@ -58,6 +61,8 @@ async function fetchCurrentQuarter(sessionContext) {
     executionTabId: null,
     frameId: null,
     period: normalizePeriod(sessionContext.period),
+    progressValue: 0,
+    progressRequestId: sessionContext.progressRequestId || null,
     renewalForecast: normalizePeriod(sessionContext.period) === PERIOD_RENEWALS,
     selectedTerritoryIds: normalizeTerritoryIds(sessionContext.territoryIds),
     tabId: sessionContext.tabId,
@@ -65,8 +70,18 @@ async function fetchCurrentQuarter(sessionContext) {
     techCloudView: sessionContext.techCloudView === true,
   };
   try {
+    publishProgress(requestContext, {
+      label: "Preparando sessao",
+      progress: 6,
+      stage: "session",
+    });
     await ensureSalesCloudExecutionContext(requestContext);
 
+    publishProgress(requestContext, {
+      label: "Carregando forecast ativo",
+      progress: 14,
+      stage: "forecastActive",
+    });
     const forecasts = await requestForecastActive(requestContext);
 
     if (!Array.isArray(forecasts) || forecasts.length === 0) {
@@ -97,7 +112,17 @@ async function fetchCurrentQuarter(sessionContext) {
       selectedTerritoryIds,
     );
     requestContext.selectedTerritoryIds = selectedTerritoryIds;
+    publishProgress(requestContext, {
+      label: "Resolvendo periodo",
+      progress: 24,
+      stage: "period",
+    });
     const forecast = await resolveForecastForPeriod(requestContext, activeForecast);
+    publishProgress(requestContext, {
+      label: "Carregando oportunidades",
+      progress: 32,
+      stage: "revenue",
+    });
     const revenueResult = await requestRevenueItemsPaginated(
       requestContext,
       forecast,
@@ -423,6 +448,7 @@ async function requestRevenueItemsPaginated(requestContext, forecast) {
       offset,
       selectedPath: extraction.path,
     });
+    publishRevenueProgress(requestContext, pageResponse, pageItems.length, offset, pageCount);
 
     if (pageItems.length === 0) {
       break;
@@ -465,6 +491,162 @@ async function requestRevenueItems(requestContext, forecast, offset) {
     },
     method: "POST",
   });
+}
+
+function publishRevenueProgress(requestContext, pageResponse, pageItemCount, offset, pageCount) {
+  const metadata = extractPaginationMetadata(pageResponse);
+  const pagination = calculateRevenuePaginationProgress(
+    metadata,
+    pageItemCount,
+    offset,
+    pageCount,
+  );
+
+  publishProgress(requestContext, {
+    count: pagination.count,
+    currentPage: pagination.currentPage,
+    label: pagination.totalPages
+      ? `Carregando oportunidades (${pagination.currentPage}/${pagination.totalPages})`
+      : "Carregando oportunidades",
+    limit: pagination.limit,
+    loaded: pagination.loaded,
+    offset: pagination.offset,
+    pageCount,
+    progress: pagination.progress,
+    remainingPages: pagination.remainingPages,
+    stage: "revenue",
+    totalPages: pagination.totalPages,
+    totalResults: pagination.totalResults,
+  });
+}
+
+function calculateRevenuePaginationProgress(metadata, pageItemCount, offset, pageCount) {
+  const limit = getPositiveNumber(metadata.limit) ?? REVENUE_PAGE_LIMIT;
+  const responseOffset = metadata.offset ?? offset;
+  const responseCount = metadata.count ?? pageItemCount;
+  const loaded = Number.isFinite(responseOffset) && Number.isFinite(responseCount)
+    ? responseOffset + responseCount
+    : offset + pageItemCount;
+  const totalResults = metadata.totalResults;
+  const inferredTotalResults = Number.isFinite(totalResults)
+    ? totalResults
+    : inferFinalTotalResults(responseOffset, responseCount, limit);
+
+  if (Number.isFinite(inferredTotalResults)) {
+    const totalPages = inferredTotalResults > 0
+      ? Math.max(1, Math.ceil(inferredTotalResults / limit))
+      : 1;
+    const currentPage = inferredTotalResults > 0
+      ? Math.min(totalPages, Math.floor(responseOffset / limit) + 1)
+      : 1;
+    const loadedRatio = inferredTotalResults > 0
+      ? Math.min(1, Math.max(0, loaded / inferredTotalResults))
+      : 1;
+
+    return {
+      count: responseCount,
+      currentPage,
+      limit,
+      loaded,
+      offset: responseOffset,
+      progress: REVENUE_PROGRESS_START + (loadedRatio * (REVENUE_PROGRESS_END - REVENUE_PROGRESS_START)),
+      remainingPages: Math.max(0, totalPages - currentPage),
+      totalPages,
+      totalResults: inferredTotalResults,
+    };
+  }
+
+  return {
+    count: responseCount,
+    currentPage: null,
+    limit,
+    loaded,
+    offset: responseOffset,
+    progress: Math.min(REVENUE_PROGRESS_END - 2, REVENUE_PROGRESS_START + (pageCount * 6)),
+    remainingPages: null,
+    totalPages: null,
+    totalResults: null,
+  };
+}
+
+function inferFinalTotalResults(offset, count, limit) {
+  if (!Number.isFinite(offset) || !Number.isFinite(count) || !Number.isFinite(limit)) {
+    return null;
+  }
+
+  if (count < limit) {
+    return offset + count;
+  }
+
+  return null;
+}
+
+function extractPaginationMetadata(response) {
+  const metadata = findPaginationMetadata(response, 0, new WeakSet()) || {};
+  const count = toFiniteNumber(metadata.count);
+  const limit = toFiniteNumber(metadata.limit);
+  const offset = toFiniteNumber(metadata.offset);
+  const totalResults = toFiniteNumber(metadata.totalResults ?? metadata.totalCount);
+  const loaded = Number.isFinite(offset) && Number.isFinite(count)
+    ? offset + count
+    : null;
+
+  return {
+    count: Number.isFinite(count) ? count : null,
+    limit: Number.isFinite(limit) ? limit : null,
+    loaded,
+    offset: Number.isFinite(offset) ? offset : null,
+    totalResults: Number.isFinite(totalResults) ? totalResults : null,
+  };
+}
+
+function getPositiveNumber(value) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : null;
+}
+
+function findPaginationMetadata(value, depth, visited) {
+  if (depth > 6 || value === null || value === undefined || typeof value !== "object") {
+    return null;
+  }
+
+  if (visited.has(value)) {
+    return null;
+  }
+  visited.add(value);
+
+  if (!Array.isArray(value)) {
+    const hasPaginationShape =
+      ("totalResults" in value || "totalCount" in value) &&
+      ("count" in value || "offset" in value);
+
+    if (hasPaginationShape) {
+      return value;
+    }
+
+    for (const nestedValue of Object.values(value)) {
+      const metadata = findPaginationMetadata(nestedValue, depth + 1, visited);
+      if (metadata) {
+        return metadata;
+      }
+    }
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const metadata = findPaginationMetadata(item, depth + 1, visited);
+      if (metadata) {
+        return metadata;
+      }
+    }
+  }
+
+  return null;
+}
+
+function toFiniteNumber(value) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
 }
 
 function createRevenuePayload(forecast, offset, options = {}) {
@@ -1627,6 +1809,45 @@ function createDebugState(sessionContext) {
     sessionStrategy: "existing tab, hidden iframe, then temporary inactive SalesCloud tab",
     techCloudView: sessionContext.techCloudView === true,
   };
+}
+
+function publishProgress(requestContext, progress) {
+  if (!requestContext.tabId || !requestContext.progressRequestId) {
+    return;
+  }
+
+  const normalizedProgress = normalizeProgressValue(progress.progress);
+  requestContext.progressValue = Math.max(
+    requestContext.progressValue || 0,
+    normalizedProgress,
+  );
+
+  try {
+    const sendResult = chrome.tabs.sendMessage(requestContext.tabId, {
+      progress: {
+        ...progress,
+        progress: requestContext.progressValue,
+        requestId: requestContext.progressRequestId,
+      },
+      type: "salesCenter.loadingProgress",
+    });
+
+    if (sendResult?.catch) {
+      sendResult.catch(() => null);
+    }
+  } catch (error) {
+    return;
+  }
+}
+
+function normalizeProgressValue(value) {
+  const numberValue = Number(value);
+
+  if (!Number.isFinite(numberValue)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(99, numberValue));
 }
 
 function recordRequestStart(debug, label, url, options) {

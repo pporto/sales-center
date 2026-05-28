@@ -356,10 +356,33 @@ function ensureSalesCenterCard() {
   }
 }
 
+if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type !== "salesCenter.loadingProgress") {
+      return false;
+    }
+
+    handleLoadingProgressMessage(message.progress);
+    return false;
+  });
+}
+
+function handleLoadingProgressMessage(progress) {
+  const state = activeDashboard?.state;
+
+  if (!state || progress?.requestId !== state.topLoaderRequestId) {
+    return;
+  }
+
+  updateTopLoadingProgress(state, progress.progress, {
+    allowBackward: false,
+    cap: 98,
+  });
+}
+
 function openSalesCenterDashboard() {
   const existingOverlay = document.getElementById(SALES_CENTER_OVERLAY_ID);
   if (existingOverlay) {
-    existingOverlay.querySelector("select")?.focus();
     return;
   }
 
@@ -390,8 +413,9 @@ function openSalesCenterDashboard() {
     }
   };
   const closeDashboard = () => {
-    document.removeEventListener("keydown", handleDashboardKeydown);
+    window.removeEventListener("keydown", handleDashboardKeydown, true);
     document.removeEventListener("click", handleFilterOutsideClick);
+    stopTopLoadingTimer(state);
     overlay.remove();
     document.body.classList.remove("sc-dashboard-open");
     activeDashboard = null;
@@ -402,8 +426,17 @@ function openSalesCenterDashboard() {
       return;
     }
 
-    if (event.ctrlKey && event.altKey && event.key.toLowerCase() === "d") {
+    const isDebugShortcut =
+      event.ctrlKey &&
+      event.altKey &&
+      (
+        String(event.key || "").toLowerCase() === "d" ||
+        event.code === "KeyD"
+      );
+
+    if (isDebugShortcut) {
       event.preventDefault();
+      event.stopPropagation();
       toggleDebugButtonVisibility(state);
     }
   };
@@ -418,7 +451,7 @@ function openSalesCenterDashboard() {
     saveDashboardTheme(nextTheme);
   });
   backdrop.addEventListener("click", closeDashboard);
-  document.addEventListener("keydown", handleDashboardKeydown);
+  window.addEventListener("keydown", handleDashboardKeydown, true);
   document.addEventListener("click", handleFilterOutsideClick);
 
   state.periodSelect.addEventListener("change", () => {
@@ -709,6 +742,13 @@ function renderDashboardShell(panel) {
     refreshButton,
   ]);
 
+  const topLoaderBar = createElement("div", { className: "sc-top-loader-bar" });
+  const topLoader = createElement("div", {
+    attributes: { "aria-hidden": "true" },
+    className: "sc-top-loader",
+  }, [
+    topLoaderBar,
+  ]);
   const summaryGrid = createElement("div", { className: "sc-summary-grid" });
   const statusRegion = createElement("div", {
     attributes: { "aria-live": "polite" },
@@ -778,6 +818,7 @@ function renderDashboardShell(panel) {
 
   panel.append(
     sessionFrame,
+    topLoader,
     header,
     toolbar,
     summaryGrid,
@@ -814,6 +855,11 @@ function renderDashboardShell(panel) {
     techCloudSwitch,
     tableWrap,
     themeToggleButton,
+    topLoaderRequestId: null,
+    topLoader,
+    topLoaderBar,
+    topLoaderProgress: 0,
+    topLoaderTimer: null,
     territoryAllButton,
     territoryFilterButton,
     territoryFilterList,
@@ -852,6 +898,55 @@ function toggleDebugButtonVisibility(state) {
     state.debugToggle.setAttribute("aria-pressed", "false");
     clearRevenueRequestInspector(state);
   }
+}
+
+function startTopLoading(state) {
+  stopTopLoadingTimer(state);
+  state.topLoaderProgress = 4;
+  state.topLoader.classList.add("sc-top-loader-active");
+  state.topLoader.classList.remove("sc-top-loader-complete");
+  updateTopLoadingProgress(state, state.topLoaderProgress);
+}
+
+function completeTopLoading(state) {
+  const completedRequestId = state.topLoaderRequestId;
+  stopTopLoadingTimer(state);
+  updateTopLoadingProgress(state, 100, { allowBackward: true });
+  state.topLoader.classList.add("sc-top-loader-complete");
+  window.setTimeout(() => {
+    if (state.topLoaderRequestId !== completedRequestId) {
+      return;
+    }
+
+    state.topLoader.classList.remove("sc-top-loader-active", "sc-top-loader-complete");
+    window.setTimeout(() => {
+      if (state.topLoaderRequestId !== completedRequestId) {
+        return;
+      }
+
+      updateTopLoadingProgress(state, 0, { allowBackward: true });
+    }, 140);
+  }, 260);
+}
+
+function stopTopLoadingTimer(state) {
+  if (!state.topLoaderTimer) {
+    return;
+  }
+
+  window.clearInterval(state.topLoaderTimer);
+  state.topLoaderTimer = null;
+}
+
+function updateTopLoadingProgress(state, progress, options = {}) {
+  const cap = options.cap ?? 100;
+  const normalizedProgress = Math.max(0, Math.min(Number(progress) || 0, cap));
+  const nextProgress = options.allowBackward === false
+    ? Math.max(state.topLoaderProgress || 0, normalizedProgress)
+    : normalizedProgress;
+
+  state.topLoaderProgress = nextProgress;
+  state.topLoaderBar.style.transform = `scaleX(${Math.min(nextProgress, 100) / 100})`;
 }
 
 function setSellerFilterExpanded(state, expanded) {
@@ -1188,6 +1283,9 @@ async function loadCurrentQuarter(state) {
     return;
   }
 
+  const loadingRequestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  state.topLoaderRequestId = loadingRequestId;
+  startTopLoading(state);
   renderLoading(state);
 
   try {
@@ -1195,6 +1293,7 @@ async function loadCurrentQuarter(state) {
     const response = await sendRuntimeMessage({
       frameName: state.frameName,
       period: state.periodSelect.value,
+      progressRequestId: loadingRequestId,
       techCloudView: state.techCloudSwitch.checked,
       territoryIds: Array.from(state.selectedTerritoryIds || []),
       type: "salesCenter.fetchCurrentQuarter",
@@ -1213,6 +1312,10 @@ async function loadCurrentQuarter(state) {
     renderDashboardData(state, response.data);
   } catch (error) {
     renderDashboardError(state, error);
+  } finally {
+    if (state.topLoaderRequestId === loadingRequestId) {
+      completeTopLoading(state);
+    }
   }
 }
 
