@@ -748,6 +748,38 @@
   margin: 0 20px 20px;
   min-height: 240px;
   overflow: auto;
+  position: relative;
+}
+
+.sc-column-multiselect {
+  height: 0;
+  pointer-events: none;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.sc-table-columns-button {
+  height: 26px;
+  pointer-events: auto;
+  position: absolute;
+  right: 6px;
+  top: 5px;
+  width: 26px;
+}
+
+.sc-table-columns-icon {
+  display: block;
+  height: 16px;
+  width: 16px;
+}
+
+.sc-column-multiselect .sc-multiselect-panel {
+  left: auto;
+  min-width: 220px;
+  pointer-events: auto;
+  right: 6px;
+  top: 36px;
 }
 
 .sc-session-frame {

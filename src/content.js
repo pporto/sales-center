@@ -7,6 +7,7 @@ const SALES_CENTER_ORIGIN_URL =
   "https://eeho.fa.us2.oraclecloud.com/hcmUI/faces/FuseWelcome";
 const SALES_CENTER_OVERLAY_ID = "sales-center-dashboard-overlay";
 const SALES_CENTER_THEME_STORAGE_KEY = "salesCenterDashboardTheme";
+const SALES_CENTER_PREFERENCES_STORAGE_KEY = "salesCenterDashboardPreferences";
 const SALES_CENTER_CURRENT_QUARTER = "Current Quarter";
 const SALES_CENTER_NEXT_QUARTER = "Next Quarter";
 const SALES_CENTER_PREVIOUS_QUARTER = "Previous Quarter";
@@ -84,20 +85,6 @@ const TABLE_COLUMNS = [
     aliases: ["workloadType"],
   },
   {
-    key: "forecast",
-    label: "FORECAST",
-    aliases: [
-      "forecastAmount",
-      "forecastRevenue",
-      "forecast",
-      "weightedRevenue",
-      "revenue",
-      "revenueAmount",
-      "amount",
-    ],
-    type: "number",
-  },
-  {
     key: "status",
     label: "STATUS",
     aliases: ["revnWinProbability"],
@@ -160,6 +147,8 @@ const TABLE_COLUMNS = [
     sortable: false,
   },
 ];
+const SELECTABLE_TABLE_COLUMNS = TABLE_COLUMNS.filter((column) => column.key !== "details");
+const DEFAULT_VISIBLE_COLUMN_KEYS = SELECTABLE_TABLE_COLUMNS.map((column) => column.key);
 
 const clickBoundCards = new WeakSet();
 const currencyFormatter = new Intl.NumberFormat("en-US", {
@@ -264,6 +253,25 @@ function createThemeToggleIcons() {
   ];
 }
 
+function createTableColumnsIcon() {
+  return createSvgElement("svg", {
+    "aria-hidden": "true",
+    class: "sc-table-columns-icon",
+    fill: "none",
+    height: "18",
+    stroke: "currentColor",
+    "stroke-linecap": "round",
+    "stroke-linejoin": "round",
+    "stroke-width": "2",
+    viewBox: "0 0 24 24",
+    width: "18",
+  }, [
+    createSvgElement("rect", { height: "14", rx: "2", width: "18", x: "3", y: "5" }),
+    createSvgElement("line", { x1: "9", x2: "9", y1: "5", y2: "19" }),
+    createSvgElement("line", { x1: "15", x2: "15", y1: "5", y2: "19" }),
+  ]);
+}
+
 function getSavedDashboardTheme() {
   try {
     return localStorage.getItem(SALES_CENTER_THEME_STORAGE_KEY) === "dark"
@@ -277,6 +285,121 @@ function getSavedDashboardTheme() {
 function saveDashboardTheme(theme) {
   try {
     localStorage.setItem(SALES_CENTER_THEME_STORAGE_KEY, theme);
+  } catch (error) {
+    return;
+  }
+}
+
+function getDefaultDashboardPreferences() {
+  return {
+    period: SALES_CENTER_CURRENT_QUARTER,
+    sellerMode: "all",
+    sellers: [],
+    statusMode: "all",
+    statuses: [...STATUS_FILTER_LABELS],
+    techCloudView: false,
+    territoryIds: [],
+    territoryMode: "first",
+    visibleColumnKeys: [...DEFAULT_VISIBLE_COLUMN_KEYS],
+    workloadTypes: [WORKLOAD_TYPE_BOOKING, WORKLOAD_TYPE_WORKLOAD],
+  };
+}
+
+function loadDashboardPreferences() {
+  const defaults = getDefaultDashboardPreferences();
+
+  try {
+    const rawPreferences = localStorage.getItem(SALES_CENTER_PREFERENCES_STORAGE_KEY);
+    if (!rawPreferences) {
+      return defaults;
+    }
+
+    const parsedPreferences = JSON.parse(rawPreferences);
+    if (!parsedPreferences || typeof parsedPreferences !== "object") {
+      return defaults;
+    }
+
+    return normalizeDashboardPreferences({
+      ...defaults,
+      ...parsedPreferences,
+    });
+  } catch (error) {
+    return defaults;
+  }
+}
+
+function normalizeDashboardPreferences(preferences) {
+  const validPeriods = new Set(SALES_CENTER_PERIODS);
+  const validWorkloadTypes = new Set([WORKLOAD_TYPE_BOOKING, WORKLOAD_TYPE_WORKLOAD]);
+  const validStatuses = new Set(STATUS_FILTER_LABELS);
+  const validColumns = new Set(DEFAULT_VISIBLE_COLUMN_KEYS);
+  const workloadTypes = normalizePreferenceArray(preferences.workloadTypes)
+    .map((type) => String(type).trim().toUpperCase())
+    .filter((type) => validWorkloadTypes.has(type));
+  const statuses = normalizePreferenceArray(preferences.statuses)
+    .map((status) => String(status).trim().toUpperCase())
+    .filter((status) => validStatuses.has(status));
+  const visibleColumnKeys = normalizePreferenceArray(preferences.visibleColumnKeys)
+    .map((columnKey) => String(columnKey).trim())
+    .filter((columnKey) => validColumns.has(columnKey));
+
+  return {
+    period: validPeriods.has(preferences.period)
+      ? preferences.period
+      : SALES_CENTER_CURRENT_QUARTER,
+    sellerMode: preferences.sellerMode === "custom" ? "custom" : "all",
+    sellers: normalizePreferenceArray(preferences.sellers).map(String),
+    statusMode: preferences.statusMode === "custom" ? "custom" : "all",
+    statuses: statuses.length > 0 ? statuses : [...STATUS_FILTER_LABELS],
+    techCloudView: preferences.techCloudView === true,
+    territoryIds: normalizePreferenceArray(preferences.territoryIds)
+      .map((territoryId) => String(territoryId).trim())
+      .filter(Boolean),
+    territoryMode: ["all", "custom", "first"].includes(preferences.territoryMode)
+      ? preferences.territoryMode
+      : "first",
+    visibleColumnKeys: visibleColumnKeys.length > 0
+      ? visibleColumnKeys
+      : [...DEFAULT_VISIBLE_COLUMN_KEYS],
+    workloadTypes: workloadTypes.length > 0
+      ? workloadTypes
+      : [WORKLOAD_TYPE_BOOKING, WORKLOAD_TYPE_WORKLOAD],
+  };
+}
+
+function normalizePreferenceArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function saveDashboardPreferences(state) {
+  if (!state) {
+    return;
+  }
+
+  const preferences = normalizeDashboardPreferences({
+    period: state.periodSelect?.value || SALES_CENTER_CURRENT_QUARTER,
+    sellerMode: state.sellerSelectionMode || "all",
+    sellers: Array.from(state.selectedSellers || []),
+    statusMode: state.statusAllToggle?.getAttribute("aria-pressed") === "true"
+      ? "all"
+      : "custom",
+    statuses: getSelectedStatuses(state),
+    techCloudView: state.techCloudSwitch?.checked === true,
+    territoryIds: Array.from(state.selectedTerritoryIds || []),
+    territoryMode: state.territorySelectionMode || "all",
+    visibleColumnKeys: Array.from(
+      state.tableState?.visibleColumnKeys || DEFAULT_VISIBLE_COLUMN_KEYS,
+    ),
+    workloadTypes: getSelectedWorkloadTypes(state),
+  });
+
+  state.preferences = preferences;
+
+  try {
+    localStorage.setItem(
+      SALES_CENTER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify(preferences),
+    );
   } catch (error) {
     return;
   }
@@ -403,6 +526,7 @@ function openSalesCenterDashboard() {
 
   const state = renderDashboardShell(panel);
   state.overlay = overlay;
+  applyDashboardPreferences(state, loadDashboardPreferences());
   applyDashboardTheme(state, getSavedDashboardTheme());
   const handleFilterOutsideClick = (event) => {
     if (!state.sellerFilterRoot.contains(event.target)) {
@@ -410,6 +534,9 @@ function openSalesCenterDashboard() {
     }
     if (!state.territoryFilterRoot.contains(event.target)) {
       setTerritoryFilterExpanded(state, false);
+    }
+    if (!state.columnFilterRoot.contains(event.target)) {
+      setColumnFilterExpanded(state, false);
     }
   };
   const closeDashboard = () => {
@@ -455,6 +582,7 @@ function openSalesCenterDashboard() {
   document.addEventListener("click", handleFilterOutsideClick);
 
   state.periodSelect.addEventListener("change", () => {
+    saveDashboardPreferences(state);
     if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
       loadCurrentQuarter(state);
       return;
@@ -470,15 +598,19 @@ function openSalesCenterDashboard() {
     event.stopPropagation();
   });
   state.territoryAllButton.addEventListener("click", () => {
+    state.territorySelectionMode = "all";
     state.selectedTerritoryIds = new Set(
       state.availableTerritories.map((territory) => territory.territoryId),
     );
     syncTerritoryFilterControls(state);
+    saveDashboardPreferences(state);
     handleTerritorySelectionChanged(state);
   });
   state.territoryNoneButton.addEventListener("click", () => {
+    state.territorySelectionMode = "custom";
     state.selectedTerritoryIds = new Set();
     syncTerritoryFilterControls(state);
+    saveDashboardPreferences(state);
     handleTerritorySelectionChanged(state);
   });
   state.refreshButton.addEventListener("click", () => {
@@ -487,24 +619,28 @@ function openSalesCenterDashboard() {
     }
   });
   state.techCloudSwitch.addEventListener("change", () => {
+    saveDashboardPreferences(state);
     if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
       loadCurrentQuarter(state);
     }
   });
   state.bookingToggle.addEventListener("click", () => {
     toggleWorkloadTypeFilterSelection(state, WORKLOAD_TYPE_BOOKING);
+    saveDashboardPreferences(state);
     if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
       applyWorkloadTypeFilter(state);
     }
   });
   state.workloadsToggle.addEventListener("click", () => {
     toggleWorkloadTypeFilterSelection(state, WORKLOAD_TYPE_WORKLOAD);
+    saveDashboardPreferences(state);
     if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
       applyWorkloadTypeFilter(state);
     }
   });
   state.statusAllToggle.addEventListener("click", () => {
     setStatusFilterAllSelected(state);
+    saveDashboardPreferences(state);
     if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
       applyWorkloadTypeFilter(state);
     }
@@ -512,6 +648,7 @@ function openSalesCenterDashboard() {
   for (const statusToggle of state.statusToggles) {
     statusToggle.addEventListener("click", () => {
       toggleStatusFilterSelection(state, statusToggle.dataset.status);
+      saveDashboardPreferences(state);
       if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
         applyWorkloadTypeFilter(state);
       }
@@ -524,16 +661,37 @@ function openSalesCenterDashboard() {
   state.sellerFilterPanel.addEventListener("click", (event) => {
     event.stopPropagation();
   });
+  state.columnFilterButton.addEventListener("click", () => {
+    const isExpanded = state.columnFilterButton.getAttribute("aria-expanded") === "true";
+    setColumnFilterExpanded(state, !isExpanded);
+  });
+  state.columnFilterPanel.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
+  state.columnAllButton.addEventListener("click", () => {
+    state.tableState.visibleColumnKeys = new Set(DEFAULT_VISIBLE_COLUMN_KEYS);
+    syncColumnFilterControls(state);
+    handleColumnVisibilityChanged(state);
+  });
+  state.columnNoneButton.addEventListener("click", () => {
+    state.tableState.visibleColumnKeys = new Set(["opportunity"]);
+    syncColumnFilterControls(state);
+    handleColumnVisibilityChanged(state);
+  });
   state.sellerAllButton.addEventListener("click", () => {
+    state.sellerSelectionMode = "all";
     state.selectedSellers = new Set(state.availableSellers);
     syncSellerFilterControls(state);
+    saveDashboardPreferences(state);
     if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
       applyWorkloadTypeFilter(state);
     }
   });
   state.sellerNoneButton.addEventListener("click", () => {
+    state.sellerSelectionMode = "custom";
     state.selectedSellers = new Set();
     syncSellerFilterControls(state);
+    saveDashboardPreferences(state);
     if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
       applyWorkloadTypeFilter(state);
     }
@@ -689,6 +847,46 @@ function renderDashboardShell(panel) {
     sellerFilterButton,
     sellerFilterPanel,
   ]);
+  const columnFilterButton = createElement("button", {
+    attributes: {
+      "aria-expanded": "false",
+      "aria-label": "Selecionar colunas da tabela",
+      title: "Selecionar colunas",
+      type: "button",
+    },
+    className: "sc-icon-button sc-table-columns-button",
+  }, [
+    createTableColumnsIcon(),
+  ]);
+  const columnAllButton = createElement("button", {
+    attributes: { type: "button" },
+    className: "sc-filter-action",
+    text: "Marcar todas",
+  });
+  const columnNoneButton = createElement("button", {
+    attributes: { type: "button" },
+    className: "sc-filter-action",
+    text: "Minimo",
+  });
+  const columnFilterList = createElement("div", { className: "sc-multiselect-list" });
+  const columnFilterPanel = createElement("div", {
+    attributes: { hidden: "" },
+    className: "sc-multiselect-panel",
+  }, [
+    createElement("div", { className: "sc-filter-actions" }, [
+      columnAllButton,
+      columnNoneButton,
+    ]),
+    columnFilterList,
+  ]);
+  const columnFilterRoot = createElement(
+    "div",
+    { className: "sc-column-multiselect" },
+    [
+      columnFilterButton,
+      columnFilterPanel,
+    ],
+  );
   const territoryFilterButton = createElement("button", {
     attributes: {
       "aria-expanded": "false",
@@ -767,34 +965,10 @@ function renderDashboardShell(panel) {
     tableBody: null,
     tableHead: null,
     tableWrap: null,
+    visibleColumnKeys: new Set(DEFAULT_VISIBLE_COLUMN_KEYS),
   };
 
   const tableHead = createElement("thead");
-  const headerRow = createElement("tr");
-  for (const column of TABLE_COLUMNS) {
-    const headerCell = createElement("th", {
-      className: getHeaderCellClassName(column),
-    });
-
-    if (column.sortable === false) {
-      headerCell.textContent = column.label;
-    } else {
-      headerCell.appendChild(
-        createElement("button", {
-          attributes: {
-            "aria-label": `Ordenar por ${column.label}`,
-            type: "button",
-          },
-          className: "sc-sort-button",
-          dataset: { sortKey: column.key },
-          text: column.label,
-        }),
-      );
-    }
-
-    headerRow.appendChild(headerCell);
-  }
-  tableHead.appendChild(headerRow);
   const tableBody = createElement("tbody");
   const table = createElement("table", { className: "sc-table" }, [
     tableHead,
@@ -803,9 +977,11 @@ function renderDashboardShell(panel) {
   tableState.tableBody = tableBody;
   tableState.tableHead = tableHead;
   const tableWrap = createElement("div", { className: "sc-table-wrap" }, [
+    columnFilterRoot,
     table,
   ]);
   tableState.tableWrap = tableWrap;
+  renderTableHeader(tableState);
   tableHead.addEventListener("click", (event) => {
     const sortButton = event.target.closest(".sc-sort-button");
     if (!sortButton) {
@@ -830,6 +1006,12 @@ function renderDashboardShell(panel) {
   return {
     bookingToggle,
     closeButton,
+    columnAllButton,
+    columnFilterButton,
+    columnFilterList,
+    columnFilterPanel,
+    columnFilterRoot,
+    columnNoneButton,
     currentDebug: null,
     debugToggle,
     frameName,
@@ -843,7 +1025,6 @@ function renderDashboardShell(panel) {
     sellerFilterPanel,
     sellerFilterRoot,
     sellerNoneButton,
-    sortButtons: tableHead.querySelectorAll(".sc-sort-button"),
     statusAllToggle,
     statusToggles,
     statusPill: null,
@@ -870,6 +1051,8 @@ function renderDashboardShell(panel) {
     availableTerritories: [],
     selectedSellers: new Set(),
     selectedTerritoryIds: new Set(),
+    sellerSelectionMode: "all",
+    territorySelectionMode: "all",
     workloadsToggle,
   };
 }
@@ -897,6 +1080,55 @@ function toggleDebugButtonVisibility(state) {
   if (state.debugToggle.hidden) {
     state.debugToggle.setAttribute("aria-pressed", "false");
     clearRevenueRequestInspector(state);
+  }
+}
+
+function applyDashboardPreferences(state, preferences) {
+  const normalizedPreferences = normalizeDashboardPreferences(preferences);
+  state.preferences = normalizedPreferences;
+  state.periodSelect.value = normalizedPreferences.period;
+  state.techCloudSwitch.checked = normalizedPreferences.techCloudView;
+  state.sellerSelectionMode = normalizedPreferences.sellerMode;
+  state.territorySelectionMode = normalizedPreferences.territoryMode;
+  state.selectedSellers = new Set(normalizedPreferences.sellers);
+  state.selectedTerritoryIds = new Set(normalizedPreferences.territoryIds);
+  state.tableState.visibleColumnKeys = new Set(normalizedPreferences.visibleColumnKeys);
+  applyWorkloadTypePreferences(state, normalizedPreferences.workloadTypes);
+  applyStatusPreferences(state, normalizedPreferences);
+  renderColumnFilterOptions(state);
+  renderTableHeader(state.tableState);
+}
+
+function applyWorkloadTypePreferences(state, workloadTypes) {
+  const selectedTypes = new Set(workloadTypes);
+  state.bookingToggle.setAttribute(
+    "aria-pressed",
+    String(selectedTypes.has(WORKLOAD_TYPE_BOOKING)),
+  );
+  state.workloadsToggle.setAttribute(
+    "aria-pressed",
+    String(selectedTypes.has(WORKLOAD_TYPE_WORKLOAD)),
+  );
+
+  if (getSelectedWorkloadTypes(state).length === 0) {
+    state.bookingToggle.setAttribute("aria-pressed", "true");
+    state.workloadsToggle.setAttribute("aria-pressed", "true");
+  }
+}
+
+function applyStatusPreferences(state, preferences) {
+  const selectedStatuses = new Set(preferences.statuses);
+  const isAllSelected =
+    preferences.statusMode === "all" ||
+    STATUS_FILTER_LABELS.every((status) => selectedStatuses.has(status));
+
+  state.statusAllToggle.setAttribute("aria-pressed", String(isAllSelected));
+
+  for (const statusToggle of state.statusToggles) {
+    statusToggle.setAttribute(
+      "aria-pressed",
+      String(isAllSelected || selectedStatuses.has(statusToggle.dataset.status)),
+    );
   }
 }
 
@@ -959,6 +1191,82 @@ function setTerritoryFilterExpanded(state, expanded) {
   state.territoryFilterPanel.hidden = !expanded;
 }
 
+function setColumnFilterExpanded(state, expanded) {
+  state.columnFilterButton.setAttribute("aria-expanded", String(expanded));
+  state.columnFilterPanel.hidden = !expanded;
+}
+
+function renderColumnFilterOptions(state) {
+  state.columnFilterList.replaceChildren();
+  const fragment = document.createDocumentFragment();
+
+  for (const column of SELECTABLE_TABLE_COLUMNS) {
+    const input = createElement("input", {
+      attributes: {
+        checked: "",
+        type: "checkbox",
+        value: column.key,
+      },
+      className: "sc-checkbox-input",
+    });
+    input.addEventListener("change", () => {
+      if (input.checked) {
+        state.tableState.visibleColumnKeys.add(column.key);
+      } else {
+        state.tableState.visibleColumnKeys.delete(column.key);
+      }
+
+      if (state.tableState.visibleColumnKeys.size === 0) {
+        state.tableState.visibleColumnKeys.add("opportunity");
+      }
+
+      syncColumnFilterControls(state);
+      handleColumnVisibilityChanged(state);
+    });
+
+    fragment.appendChild(
+      createElement("label", { className: "sc-checkbox-row" }, [
+        input,
+        createElement("span", { text: column.label || column.key }),
+      ]),
+    );
+  }
+
+  state.columnFilterList.appendChild(fragment);
+  syncColumnFilterControls(state);
+}
+
+function syncColumnFilterControls(state) {
+  for (const input of state.columnFilterList.querySelectorAll("input[type='checkbox']")) {
+    input.checked = state.tableState.visibleColumnKeys.has(input.value);
+  }
+
+  updateColumnFilterButtonLabel(state);
+}
+
+function updateColumnFilterButtonLabel(state) {
+  const selectedCount = state.tableState.visibleColumnKeys.size;
+  const totalCount = SELECTABLE_TABLE_COLUMNS.length;
+  const label = selectedCount === totalCount
+    ? "Selecionar colunas da tabela: todas"
+    : `Selecionar colunas da tabela: ${selectedCount} de ${totalCount}`;
+
+  state.columnFilterButton.setAttribute("aria-label", label);
+  state.columnFilterButton.setAttribute("title", label);
+}
+
+function handleColumnVisibilityChanged(state) {
+  saveDashboardPreferences(state);
+  renderTableHeader(state.tableState);
+
+  if (state.tableState.items.length > 0) {
+    renderOpportunityRows(state.tableState, state.tableState.items);
+    return;
+  }
+
+  renderEmptyRows(state, "Nenhuma oportunidade encontrada para os filtros selecionados.");
+}
+
 function renderTerritoryFilterOptions(state) {
   state.territoryFilterList.replaceChildren();
 
@@ -985,6 +1293,7 @@ function renderTerritoryFilterOptions(state) {
       className: "sc-checkbox-input",
     });
     input.addEventListener("change", () => {
+      state.territorySelectionMode = "custom";
       if (input.checked) {
         state.selectedTerritoryIds.add(territory.territoryId);
       } else {
@@ -992,6 +1301,7 @@ function renderTerritoryFilterOptions(state) {
       }
 
       syncTerritoryFilterControls(state);
+      saveDashboardPreferences(state);
       handleTerritorySelectionChanged(state);
     });
 
@@ -1074,8 +1384,14 @@ function handleTerritorySelectionChanged(state) {
 
 function renderSellerFilterOptions(state, items) {
   const sellers = collectSellerOptions(items);
+  const availableSellerSet = new Set(sellers);
+  const previousSelectedSellers = Array.from(state.selectedSellers || [])
+    .filter((seller) => availableSellerSet.has(seller));
+
   state.availableSellers = sellers;
-  state.selectedSellers = new Set(sellers);
+  state.selectedSellers = state.sellerSelectionMode === "all"
+    ? new Set(sellers)
+    : new Set(previousSelectedSellers);
   state.sellerFilterList.replaceChildren();
 
   if (sellers.length === 0) {
@@ -1101,6 +1417,7 @@ function renderSellerFilterOptions(state, items) {
       className: "sc-checkbox-input",
     });
     input.addEventListener("change", () => {
+      state.sellerSelectionMode = "custom";
       if (input.checked) {
         state.selectedSellers.add(seller);
       } else {
@@ -1108,6 +1425,7 @@ function renderSellerFilterOptions(state, items) {
       }
 
       syncSellerFilterControls(state);
+      saveDashboardPreferences(state);
       if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
         applyWorkloadTypeFilter(state);
       }
@@ -1239,7 +1557,7 @@ function renderLoading(state) {
 
   for (let rowIndex = 0; rowIndex < 8; rowIndex += 1) {
     const row = createElement("tr");
-    for (let colIndex = 0; colIndex < TABLE_COLUMNS.length; colIndex += 1) {
+    for (let colIndex = 0; colIndex < getVisibleColumnCount(state.tableState); colIndex += 1) {
       row.appendChild(
         createElement("td", {}, [
           createElement("span", { className: "sc-skeleton" }),
@@ -1507,20 +1825,21 @@ function renderForecastActiveTerritoryOptions(state, data) {
   );
   const previousSelectedTerritoryIds = Array.from(state.selectedTerritoryIds || [])
     .filter((territoryId) => availableTerritoryIdSet.has(territoryId));
-  const responseSelectedTerritoryIds = Array.isArray(data?.selectedTerritoryIds)
-    ? data.selectedTerritoryIds.map((territoryId) => String(territoryId).trim())
-      .filter((territoryId) => availableTerritoryIdSet.has(territoryId))
-    : [];
-
   state.availableTerritories = availableTerritories;
-  state.selectedTerritoryIds = new Set(
-    previousSelectedTerritoryIds.length > 0
-      ? previousSelectedTerritoryIds
-      : responseSelectedTerritoryIds.length > 0
-        ? responseSelectedTerritoryIds
-        : availableTerritories.slice(0, 1).map((territory) => territory.territoryId),
-  );
+  if (state.territorySelectionMode === "all") {
+    state.selectedTerritoryIds = new Set(
+      availableTerritories.map((territory) => territory.territoryId),
+    );
+  } else if (state.territorySelectionMode === "first") {
+    state.selectedTerritoryIds = new Set(
+      availableTerritories.slice(0, 1).map((territory) => territory.territoryId),
+    );
+    state.territorySelectionMode = "custom";
+  } else {
+    state.selectedTerritoryIds = new Set(previousSelectedTerritoryIds);
+  }
   renderTerritoryFilterOptions(state);
+  saveDashboardPreferences(state);
 }
 
 function applyWorkloadTypeFilter(state) {
@@ -1927,20 +2246,81 @@ function toTitleCase(value) {
   return normalizedValue.charAt(0).toUpperCase() + normalizedValue.slice(1);
 }
 
+function getVisibleTableColumns(tableState) {
+  const visibleKeys = tableState.visibleColumnKeys || new Set(DEFAULT_VISIBLE_COLUMN_KEYS);
+  const visibleColumns = SELECTABLE_TABLE_COLUMNS.filter((column) =>
+    visibleKeys.has(column.key),
+  );
+  const detailsColumn = TABLE_COLUMNS.find((column) => column.key === "details");
+
+  return detailsColumn ? [...visibleColumns, detailsColumn] : visibleColumns;
+}
+
+function getVisibleColumnCount(tableState) {
+  return Math.max(1, getVisibleTableColumns(tableState).length);
+}
+
+function renderTableHeader(tableState) {
+  const headerRow = createElement("tr");
+
+  for (const column of getVisibleTableColumns(tableState)) {
+    const headerCell = createElement("th", {
+      className: getHeaderCellClassName(column),
+    });
+
+    if (column.sortable === false) {
+      headerCell.textContent = column.label;
+    } else {
+      headerCell.appendChild(
+        createElement("button", {
+          attributes: {
+            "aria-label": `Ordenar por ${column.label}`,
+            type: "button",
+          },
+          className: "sc-sort-button",
+          dataset: { sortKey: column.key },
+          text: column.label,
+        }),
+      );
+    }
+
+    headerRow.appendChild(headerCell);
+  }
+
+  tableState.tableHead.replaceChildren(headerRow);
+  ensureVisibleSortColumn(tableState);
+  syncSortButtons(tableState);
+}
+
+function ensureVisibleSortColumn(tableState) {
+  const visibleColumns = getVisibleTableColumns(tableState);
+  const isSortColumnVisible = visibleColumns.some((column) => column.key === tableState.sortKey);
+
+  if (isSortColumnVisible) {
+    return;
+  }
+
+  const firstSortableColumn = visibleColumns.find((column) => column.sortable !== false);
+  tableState.sortKey = firstSortableColumn?.key || "opportunity";
+  tableState.sortDirection = "asc";
+}
+
 function renderOpportunityRows(tableState, items = tableState.items) {
   const previousScrollTop = tableState.tableWrap?.scrollTop || 0;
   const previousScrollLeft = tableState.tableWrap?.scrollLeft || 0;
   tableState.items = items;
+  ensureVisibleSortColumn(tableState);
   syncSortButtons(tableState);
   const fragment = document.createDocumentFragment();
   const sortedItems = sortOpportunityItems(items, tableState);
+  const visibleColumns = getVisibleTableColumns(tableState);
 
   for (const item of sortedItems) {
     const rowId = getRowId(item);
     const row = createElement("tr");
     row.dataset.rowId = rowId;
 
-    for (const column of TABLE_COLUMNS) {
+    for (const column of visibleColumns) {
       const cell = createElement("td", {
         className: getCellClassName(column),
       });
@@ -1951,7 +2331,7 @@ function renderOpportunityRows(tableState, items = tableState.items) {
     fragment.appendChild(row);
 
     if (tableState.expandedRows.has(rowId)) {
-      fragment.appendChild(renderDetailsRow(item));
+      fragment.appendChild(renderDetailsRow(item, tableState));
     }
   }
 
@@ -2061,10 +2441,10 @@ function renderDetailsToggleCell(cell, item, tableState) {
   cell.appendChild(button);
 }
 
-function renderDetailsRow(item) {
+function renderDetailsRow(item, tableState) {
   const row = createElement("tr", { className: "sc-details-row" });
   const cell = createElement("td", {
-    attributes: { colspan: String(TABLE_COLUMNS.length) },
+    attributes: { colspan: String(getVisibleColumnCount(tableState)) },
     className: "sc-details-cell",
   });
   const grid = createElement("div", { className: "sc-details-grid" });
@@ -2391,7 +2771,7 @@ function renderEmptyRows(state, message) {
   const row = createElement("tr");
   row.appendChild(
     createElement("td", {
-      attributes: { colspan: String(TABLE_COLUMNS.length) },
+      attributes: { colspan: String(getVisibleColumnCount(state.tableState)) },
       className: "sc-empty-cell",
       text: message,
     }),
