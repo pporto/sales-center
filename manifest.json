@@ -40,6 +40,16 @@
       ],
       "js": [
         "src/infra/chromeRuntimeAdapter.js",
+        "src/content/config.js",
+        "src/content/dom.js",
+        "src/content/preferences.js",
+        "src/content/bootstrap.js",
+        "src/content/shell.js",
+        "src/content/filters.js",
+        "src/content/dataController.js",
+        "src/content/tableRenderer.js",
+        "src/content/runtimeAndFormatters.js",
+        "src/content/observer.js",
         "src/content.js"
       ],
       "run_at": "document_idle"

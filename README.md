@@ -7,7 +7,7 @@ Extensao Chrome Manifest V3 que adiciona o atalho **Sales Center** na pagina Ora
 ## Estrutura
 
 - `manifest.json`: configuracao da extensao, com escopo restrito ao endereco Oracle informado.
-- `src/content.js`: entrada do content script; insere o atalho no DOM, abre o dashboard e envia mensagens para o service worker.
+- `src/content.js`: bootstrap minimo do content script; inicia o observer da pagina.
 - `src/background.js`: bootstrap do service worker; carrega os modulos com `importScripts`, registra o message router e conecta repository, API client, cache e adapters.
 - `src/dashboard.css`: estilos do dashboard no padrao Oracle Enterprise Workbench.
 - `src/shared/`: constantes, contratos JSDoc, erros e utilitarios compartilhados.
@@ -16,8 +16,23 @@ Extensao Chrome Manifest V3 que adiciona o atalho **Sales Center** na pagina Ora
   - `messageRouter.js`: roteia mensagens e padroniza respostas `{ ok, data, error, meta }`.
   - `salesCenterRepository.js`: combina API client, cache, deduplicacao e refresh forcado.
   - `smcApiClient.js`: concentra endpoints, payloads, paginacao e parsing das APIs SMC.
+  - `smcHttpTransport.js`: executa requests no frame SalesCloud, em aba temporaria ou no contexto da extensao.
+  - `salesCloudSession.js`: localiza, aquece e recupera contexto de sessao SalesCloud.
+  - `requestRecorder.js`: registra progresso e dados sanitizados para o Request inspector.
+  - `httpUtils.js`: utilitarios de retry, parsing JSON e deteccao de erro de sessao.
   - `cache/cacheManager.js`: cache com TTL, memoria, `chrome.storage.local`, pruning e invalidacao.
   - `cache/requestDeduplicator.js`: evita requests simultaneas duplicadas para a mesma chave.
+- `src/content/`: modulos do dashboard e da integracao com a pagina Oracle:
+  - `config.js`: constantes, estado compartilhado do dashboard e labels.
+  - `dom.js`: helpers de criacao/consulta de elementos.
+  - `preferences.js`: preferencias locais de tema, filtros e colunas.
+  - `bootstrap.js`: criacao do card Sales Center e inicializacao do dashboard.
+  - `shell.js`: estrutura visual, header, botoes, paineis e estados de loading/erro.
+  - `filters.js`: filtros de periodo, territorio, vendedor, status, tipo e colunas.
+  - `dataController.js`: carregamento de dados, aplicacao de filtros e refresh.
+  - `tableRenderer.js`: renderizacao da tabela, ordenacao e detalhes.
+  - `runtimeAndFormatters.js`: mensagens para o background, formatadores e helpers de exibicao.
+  - `observer.js`: `MutationObserver` que injeta o card quando a home Oracle termina de renderizar.
 - `tests/`: testes basicos dos modulos de cache, deduplicacao, API client e repository.
 - `assets/icons/`: icones locais da extensao.
 
@@ -53,9 +68,11 @@ node tests\smcApiClient.test.js
 node tests\salesCenterRepository.test.js
 ```
 
-Para checagem sintatica rapida:
+Para checagem sintatica rapida dos bootstraps:
 
 ```powershell
 node --check src\background.js
 node --check src\content.js
 ```
+
+Ao alterar modulos extraidos, rode tambem `node --check` no arquivo modificado.
