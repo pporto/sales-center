@@ -1,5 +1,18 @@
 "use strict";
 
+importScripts(
+  "shared/constants.js",
+  "shared/types.js",
+  "shared/errors.js",
+  "shared/utils.js",
+  "infra/chromeStorageAdapter.js",
+  "background/cache/cacheManager.js",
+  "background/cache/requestDeduplicator.js",
+  "background/smcApiClient.js",
+  "background/salesCenterRepository.js",
+  "background/messageRouter.js",
+);
+
 const API_ORIGIN = "https://gxpap-e.oracle.com";
 const API_BASE = `${API_ORIGIN}/oalcrm/web/SalesForecastServices-GEC`;
 const SALES_CLOUD_BOOTSTRAP_URL = `${API_ORIGIN}/`;
@@ -30,34 +43,61 @@ const requestCacheMemory = new Map();
 const requestCacheInflight = new Map();
 let requestCacheGeneration = 0;
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type !== "salesCenter.fetchCurrentQuarter") {
-    return false;
-  }
+const salesCenterStorageAdapter = SalesCenterInfra.createChromeStorageAdapter("local");
+const salesCenterCacheManager = SalesCenterBackgroundCache.createCacheManager({
+  maxEntries: SalesCenterConstants.REQUEST_CACHE_MAX_ENTRIES,
+  namespace: SalesCenterConstants.CACHE_NAMESPACE,
+  storageAdapter: salesCenterStorageAdapter,
+  storageKey: SalesCenterConstants.REQUEST_CACHE_STORAGE_KEY,
+});
+const salesCenterRequestDeduplicator = SalesCenterBackgroundCache.createRequestDeduplicator();
+let salesCenterRepository = null;
 
-  fetchCurrentQuarter({
-    forceRefresh: message.forceRefresh === true,
-    frameName: message.frameName,
-    period: normalizePeriod(message.period),
-    progressRequestId: message.progressRequestId || null,
-    tabId: sender.tab?.id,
-    territoryIds: normalizeTerritoryIds(message.territoryIds),
-  })
-    .then((data) => sendResponse({ data, ok: true }))
-    .catch((error) => {
-      sendResponse({
-        debug: error.debug || null,
-        error: {
-          code: error.code || null,
-          message: error.message,
-          name: error.name,
-          status: error.status || null,
-        },
-        ok: false,
-      });
+function getSalesCenterRepository() {
+  if (!salesCenterRepository) {
+    const apiClient = SalesCenterBackground.createSmcApiClient({
+      fetchJson,
+      publishProgress,
     });
 
-  return true;
+    salesCenterRepository = SalesCenterBackground.createSalesCenterRepository({
+      apiClient,
+      cacheManager: salesCenterCacheManager,
+      closeTemporarySalesCloudTab,
+      createDebugState,
+      deduplicator: salesCenterRequestDeduplicator,
+      ensureSalesCloudExecutionContext,
+      publishProgress,
+    });
+  }
+
+  return salesCenterRepository;
+}
+
+async function handleFetchDashboardMessage(message, sender) {
+  const payload = message?.payload || message || {};
+  const meta = message?.meta || {};
+
+  return getSalesCenterRepository().getDashboard({
+    forceRefresh: payload.forceRefresh === true,
+    frameName: meta.frameName || payload.frameName,
+    period: SalesCenterUtils.normalizePeriod(payload.period),
+    progressRequestId: meta.requestId || payload.progressRequestId || null,
+    tabId: sender.tab?.id,
+    territoryIds: SalesCenterUtils.normalizeTerritoryIds(payload.territoryIds),
+  });
+}
+
+const salesCenterMessageRouter = SalesCenterBackground.createMessageRouter({
+  handlers: {
+    "salesCenter.fetchCurrentQuarter": handleFetchDashboardMessage,
+    "salesCenter.fetchDashboard": handleFetchDashboardMessage,
+  },
+  normalizeError: SalesCenterErrors.toMessageError,
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  return salesCenterMessageRouter.handle(message, sender, sendResponse);
 });
 
 async function fetchCurrentQuarter(sessionContext) {
@@ -2400,14 +2440,4 @@ function timestampToIsoDate(value) {
   }
 
   return date.toISOString().slice(0, 10);
-}
-
-class SalesCenterRequestError extends Error {
-  constructor(message, status, debug, options = {}) {
-    super(message);
-    this.name = "SalesCenterRequestError";
-    this.status = status;
-    this.debug = debug;
-    Object.assign(this, options);
-  }
 }

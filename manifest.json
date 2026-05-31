@@ -39,6 +39,7 @@
         "src/dashboard.css"
       ],
       "js": [
+        "src/infra/chromeRuntimeAdapter.js",
         "src/content.js"
       ],
       "run_at": "document_idle"

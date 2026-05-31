@@ -1578,12 +1578,16 @@ async function loadCurrentQuarter(state, options = {}) {
   try {
     waitForSessionFrameLoad(state.sessionFrame).catch(() => null);
     const response = await sendRuntimeMessage({
-      frameName: state.frameName,
-      forceRefresh: options.forceRefresh === true,
-      period: state.periodSelect.value,
-      progressRequestId: loadingRequestId,
-      territoryIds: Array.from(state.selectedTerritoryIds || []),
-      type: "salesCenter.fetchCurrentQuarter",
+      meta: {
+        frameName: state.frameName,
+        requestId: loadingRequestId,
+      },
+      payload: {
+        forceRefresh: options.forceRefresh === true,
+        period: state.periodSelect.value,
+        territoryIds: Array.from(state.selectedTerritoryIds || []),
+      },
+      type: "salesCenter.fetchDashboard",
     });
 
     if (!response?.ok) {
@@ -2894,6 +2898,10 @@ function setStatusPill(state, text, tone) {
 }
 
 function sendRuntimeMessage(message) {
+  if (globalThis.SalesCenterInfra?.createChromeRuntimeAdapter) {
+    return SalesCenterInfra.createChromeRuntimeAdapter().sendMessage(message);
+  }
+
   return new Promise((resolve, reject) => {
     if (
       typeof chrome === "undefined" ||
