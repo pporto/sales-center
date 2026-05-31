@@ -347,7 +347,7 @@ function renderOpportunityIdentityCell(cell, item, column) {
 
     detailParts.forEach((part, index) => {
       if (index > 0) {
-        meta.appendChild(createElement("span", { text: " Â· " }));
+        meta.appendChild(createElement("span", { text: " · " }));
       }
 
       meta.appendChild(part);

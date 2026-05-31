@@ -38,10 +38,10 @@ function renderComingSoon(state, period) {
   state.statusRegion.replaceChildren(
     createElement("div", {
       className: "sc-inline-status",
-      text: "Esta opÃ§Ã£o do perÃ­odo estÃ¡ preparada para a prÃ³xima etapa.",
+      text: "Esta opção do período está preparada para a próxima etapa.",
     }),
   );
-  renderEmptyRows(state, "Sem dados para o perÃ­odo selecionado.");
+  renderEmptyRows(state, "Sem dados para o período selecionado.");
 }
 
 function isLoadableSalesCenterPeriod(period) {
@@ -84,7 +84,7 @@ async function loadCurrentQuarter(state, options = {}) {
     if (!response?.ok) {
       const loadError = new Error(
         response?.error?.message ||
-          "NÃ£o foi possÃ­vel carregar as oportunidades.",
+          "Não foi possível carregar as oportunidades.",
       );
       loadError.code = response?.error?.code || null;
       loadError.debug = response?.debug || null;
@@ -230,10 +230,10 @@ function renderNoTerritoriesSelected(state) {
   state.statusRegion.replaceChildren(
     createElement("div", {
       className: "sc-inline-status",
-      text: "Selecione ao menos um territÃ³rio para carregar oportunidades.",
+      text: "Selecione ao menos um território para carregar oportunidades.",
     }),
   );
-  renderEmptyRows(state, "Nenhum territÃ³rio selecionado.");
+  renderEmptyRows(state, "Nenhum território selecionado.");
 }
 
 function renderNoStatusesSelected(state) {
@@ -273,7 +273,7 @@ function renderForecastActiveTerritoryOptions(state, data) {
     state.territoryFilterList.replaceChildren(
       createElement("div", {
         className: "sc-multiselect-empty",
-        text: "Nenhum territÃ³rio",
+        text: "Nenhum território",
       }),
     );
     syncTerritoryFilterControls(state);
@@ -417,7 +417,7 @@ function renderDashboardError(state, error) {
       retryButton,
     ]),
   );
-  renderEmptyRows(state, "NÃ£o foi possÃ­vel carregar oportunidades.");
+  renderEmptyRows(state, "Não foi possível carregar oportunidades.");
 }
 
 function clearRevenueRequestInspector(state) {
@@ -444,6 +444,11 @@ function renderRevenueRequestInspector(state, debug) {
     : [];
 
   if (requests.length === 0) {
+    if (debug?.cache) {
+      renderCachedRequestInspector(state, debug.cache);
+      return;
+    }
+
     clearRevenueRequestInspector(state);
     return;
   }
@@ -464,6 +469,42 @@ function renderRevenueRequestInspector(state, debug) {
 
   state.requestInspector.hidden = false;
   state.requestInspector.replaceChildren(header, requestList);
+}
+
+function renderCachedRequestInspector(state, cache) {
+  const header = createElement("div", { className: "sc-request-inspector-header" }, [
+    createElement("div", {}, [
+      createElement("strong", { text: "Dados carregados do cache" }),
+      createElement("span", {
+        text: " nenhuma requisição HTTP foi executada nesta carga",
+      }),
+    ]),
+  ]);
+  const cacheDetails = createElement("div", { className: "sc-request-list" }, [
+    createElement("details", {
+      attributes: { open: "" },
+      className: "sc-request-details",
+    }, [
+      createElement("summary", { className: "sc-request-summary" }, [
+        createElement("span", {
+          text: `Cache | ${cache.status || "hit"} | válido até ${formatInspectorDate(cache.expiresAt)}`,
+        }),
+      ]),
+      createElement("div", { className: "sc-request-meta" }, [
+        createRequestMetaItem("Status", cache.status || "hit"),
+        createRequestMetaItem("Cached at", formatInspectorDate(cache.cachedAt)),
+        createRequestMetaItem("Expires at", formatInspectorDate(cache.expiresAt)),
+      ]),
+      createRequestCodeBlock("Cache key", cache.key || "-"),
+      createRequestCodeBlock(
+        "Refresh",
+        "Clique em Refresh para invalidar o cache e registrar novas requisições.",
+      ),
+    ]),
+  ]);
+
+  state.requestInspector.hidden = false;
+  state.requestInspector.replaceChildren(header, cacheDetails);
 }
 
 function getInspectableRequestLabel(request) {
@@ -533,6 +574,20 @@ function createRequestCodeBlock(label, value) {
     createElement("div", { className: "sc-request-code-label", text: label }),
     createElement("pre", { className: "sc-request-code", text: value || "-" }),
   ]);
+}
+
+function formatInspectorDate(value) {
+  if (!value) {
+    return "-";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return date.toLocaleString("pt-BR");
 }
 
 function stringifyForInspector(value) {

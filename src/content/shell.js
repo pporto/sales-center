@@ -16,7 +16,7 @@ function renderDashboardShell(panel) {
     className: "sc-session-frame",
   });
   sessionFrame.addEventListener("load", () => {
-    sessionFrame.dataset.loaded = "true";
+    sessionFrame.dataset.loadEventFired = "true";
   });
   const titleBlock = createElement("div", { className: "sc-title-block" }, [
     createElement("div", { className: "sc-kicker", text: "Oracle Sales" }),
@@ -174,7 +174,7 @@ function renderDashboardShell(panel) {
       type: "button",
     },
     className: "sc-multiselect-button",
-    text: "TerritÃ³rio: Carregando",
+    text: "Território: Carregando",
   });
   const territoryAllButton = createElement("button", {
     attributes: { type: "button" },
@@ -205,7 +205,7 @@ function renderDashboardShell(panel) {
     createElement("label", {
       attributes: { for: "sales-center-period" },
       className: "sc-field",
-      text: "PerÃ­odo",
+      text: "Período",
     }),
     periodSelect,
     territoryFilterRoot,

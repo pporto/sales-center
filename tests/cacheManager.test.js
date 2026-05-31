@@ -37,8 +37,15 @@ const storageAdapter = {
   assert.equal(await cacheManager.get(key), null);
 
   await cacheManager.set(key, { items: [2] }, 100);
+  const otherPeriodKey = cacheManager.createKey(["dashboard", "other-period"]);
+  const otherTerritoryKey = cacheManager.createKey(["dashboard", "period", "territory-2"]);
+  await cacheManager.set(otherPeriodKey, { items: [3] }, 100);
+  await cacheManager.set(otherTerritoryKey, { items: [4] }, 100);
   await cacheManager.invalidateAll();
   assert.equal(await cacheManager.get(key), null);
+  assert.equal(await cacheManager.get(otherPeriodKey), null);
+  assert.equal(await cacheManager.get(otherTerritoryKey), null);
+  assert.deepEqual(store.cache.entries, {});
 
   console.log("cacheManager.test.js passed");
 })().catch((error) => {

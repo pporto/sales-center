@@ -1,10 +1,10 @@
 "use strict";
 
 var SESSION_API_ORIGIN = SalesCenterConstants.API_ORIGIN;
-var SESSION_SALES_CLOUD_API_PROBE_AFTER_COMPLETE_MS = SalesCenterConstants.SALES_CLOUD_API_PROBE_AFTER_COMPLETE_MS;
 var SESSION_SALES_CLOUD_BOOTSTRAP_URL = SalesCenterConstants.SALES_CLOUD_BOOTSTRAP_URL;
 var SESSION_SALES_CLOUD_FRAME_MAX_REFRESHES = SalesCenterConstants.SALES_CLOUD_FRAME_MAX_REFRESHES;
 var SESSION_SALES_CLOUD_FRAME_REFRESH_AFTER_MS = SalesCenterConstants.SALES_CLOUD_FRAME_REFRESH_AFTER_MS;
+var SESSION_SALES_CLOUD_MOUNT_SETTLE_MS = SalesCenterConstants.SALES_CLOUD_MOUNT_SETTLE_MS;
 var SESSION_SALES_CLOUD_REFERER = SalesCenterConstants.SALES_CLOUD_REFERER;
 var SESSION_SALES_CLOUD_TAB_MAX_RECREATES = SalesCenterConstants.SALES_CLOUD_TAB_MAX_RECREATES;
 var SESSION_SALES_CLOUD_TAB_MAX_REFRESHES = SalesCenterConstants.SALES_CLOUD_TAB_MAX_REFRESHES;
@@ -60,7 +60,7 @@ async function warmSalesCloudSession(requestContext) {
     frame: executionResult?.result || null,
     step: "warmSalesCloudSession",
   });
-  await delay(1000);
+  await delay(350);
 }
 
 async function prepareSalesCloudFrameStorageAccess(requestContext) {
@@ -137,16 +137,6 @@ async function preferExistingSalesCloudTabContext(requestContext) {
     context.frameId,
     "existing gxpap-e.oracle.com tab",
   );
-  if (!await probeSalesCloudApiReadyOnce(requestContext, context.tabId, context.frameId)) {
-    requestContext.debug.sessionRecovery.push({
-      href: context.href,
-      readyState: context.readyState,
-      step: "preferExistingSalesCloudTabContext",
-      usable: false,
-    });
-    return false;
-  }
-
   requestContext.debug.sessionRecovery.push({
     href: context.href,
     readyState: context.readyState,
@@ -174,15 +164,6 @@ async function ensureSalesCloudExecutionContext(requestContext, options = {}) {
         "hidden iframe in current Oracle HCM tab",
       );
       await prepareSalesCloudFrameStorageAccess(requestContext);
-      if (!await probeSalesCloudApiReadyOnce(requestContext, requestContext.tabId, frameId)) {
-        throw new SalesCenterRequestError(
-          "Iframe SalesCloudSMC-GEC carregou, mas a API ainda retornou sessao invalida.",
-          401,
-          requestContext.debug,
-          { code: "SESSION_HTML" },
-        );
-      }
-
       requestContext.debug.sessionRecovery.push({
         frameId,
         step: "ensureSalesCloudExecutionContext",
@@ -255,7 +236,6 @@ async function waitForSalesCloudTabContext(requestContext, initialTabId) {
   let tabId = initialTabId;
   const timeoutAt = Date.now() + SESSION_SALES_CLOUD_TAB_TIMEOUT_MS;
   let firstIncompleteAt = null;
-  let forcedStabilizationRefresh = false;
   let recreateCount = 0;
   let refreshCount = 0;
 
@@ -310,7 +290,6 @@ async function waitForSalesCloudTabContext(requestContext, initialTabId) {
           recreateCount,
         });
         firstIncompleteAt = null;
-        forcedStabilizationRefresh = false;
         refreshCount = 0;
         await delay(1500);
         continue;
@@ -325,51 +304,10 @@ async function waitForSalesCloudTabContext(requestContext, initialTabId) {
     }
 
     if (frame?.readyState === "complete") {
-      if (!forcedStabilizationRefresh && refreshCount < SESSION_SALES_CLOUD_TAB_MAX_REFRESHES) {
-        forcedStabilizationRefresh = true;
-        refreshCount += 1;
-        await refreshSalesCloudTab(requestContext, tabId, {
-          href: frame.href,
-          reason: "first complete stabilization refresh",
-          refreshCount,
-        });
-        firstIncompleteAt = Date.now();
-        await delay(1500);
-        continue;
-      }
-
-      await delay(SESSION_SALES_CLOUD_API_PROBE_AFTER_COMPLETE_MS);
-      if (!await probeSalesCloudApiReadyOnce(requestContext, tabId, frame.frameId)) {
-        if (refreshCount < SESSION_SALES_CLOUD_TAB_MAX_REFRESHES) {
-          refreshCount += 1;
-          await refreshSalesCloudTab(requestContext, tabId, {
-            href: frame.href,
-            reason: "API probe returned session HTML",
-            refreshCount,
-          });
-          firstIncompleteAt = Date.now();
-          await delay(1500);
-          continue;
-        }
-
-        if (recreateCount < SESSION_SALES_CLOUD_TAB_MAX_RECREATES) {
-          recreateCount += 1;
-          tabId = await recreateTemporarySalesCloudTab(requestContext, tabId, {
-            href: frame.href,
-            reason: "API probe stayed unauthorized after refreshes",
-            recreateCount,
-          });
-          firstIncompleteAt = null;
-          forcedStabilizationRefresh = false;
-          refreshCount = 0;
-          await delay(1500);
-          continue;
-        }
-
-        await delay(1000);
-        continue;
-      }
-
+      await waitForSalesCloudMountSettle(requestContext, tabId, frame.frameId, {
+        href: frame.href,
+        source: "temporary tab",
+      });
       return {
         frameId: frame.frameId,
         href: frame.href,
@@ -467,99 +405,6 @@ async function inspectSalesCloudTabFrame(requestContext, tabId) {
   }
 }
 
-async function probeSalesCloudApiReadyOnce(requestContext, tabId, frameId) {
-  try {
-    const [executionResult] = await chrome.scripting.executeScript({
-      args: [
-        {
-          headers: {
-            Accept: "application/json, text/javascript, */*; q=0.01",
-            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Content-Type": "application/json",
-            "X-Requested-With": "XMLHttpRequest",
-          },
-          url: getForecastActiveUrl(),
-        },
-      ],
-      func: async ({ headers, url }) => {
-        const response = await fetch(url, {
-          cache: "no-store",
-          credentials: "include",
-          headers,
-          method: "GET",
-        });
-        const text = await response.text();
-        const preview = text.slice(0, 500);
-        const normalizedPreview = preview.trim().toLowerCase();
-        const looksLikeHtml =
-          normalizedPreview.startsWith("<!doctype") ||
-          normalizedPreview.startsWith("<html") ||
-          normalizedPreview.includes("<html") ||
-          normalizedPreview.includes("<form") ||
-          normalizedPreview.includes("login") ||
-          normalizedPreview.includes("signin");
-        let jsonReady = false;
-
-        if (!looksLikeHtml && text.trim()) {
-          try {
-            let preparedText = text.trim().replace(/^\uFEFF/, "");
-            for (const guard of [")]}'", ")]}',", "while(1);", "for(;;);"]) {
-              if (preparedText.startsWith(guard)) {
-                preparedText = preparedText.slice(guard.length).trim();
-                break;
-              }
-            }
-
-            JSON.parse(preparedText);
-            jsonReady = true;
-          } catch (error) {
-            jsonReady = false;
-          }
-        }
-
-        return {
-          bodySize: text.length,
-          contentType: response.headers.get("content-type") || "",
-          ok: response.ok,
-          preview,
-          ready: response.ok && jsonReady,
-          sessionHtml: looksLikeHtml,
-          status: response.status,
-          statusText: response.statusText,
-        };
-      },
-      target: {
-        frameIds: [frameId],
-        tabId,
-      },
-      world: "MAIN",
-    });
-    const result = executionResult?.result || null;
-
-    requestContext.debug.sessionRecovery.push({
-      bodySize: result?.bodySize || 0,
-      contentType: result?.contentType || "",
-      frameId,
-      ok: result?.ok === true,
-      ready: result?.ready === true,
-      sessionHtml: result?.sessionHtml === true,
-      status: result?.status || null,
-      step: "probeSalesCloudApiReadyOnce",
-      tabId,
-    });
-
-    return result?.ready === true;
-  } catch (error) {
-    requestContext.debug.sessionRecovery.push({
-      error: error?.message || String(error),
-      frameId,
-      step: "probeSalesCloudApiReadyOnce",
-      tabId,
-    });
-    return false;
-  }
-}
-
 async function refreshSalesCloudTab(requestContext, tabId, details) {
   try {
     const tab = await chrome.tabs.get(tabId);
@@ -593,8 +438,8 @@ function shouldNavigateBootstrapTabToSalesCloud(tab) {
   return (
     tab?.status === "complete" &&
     (
-      url === SESSION_SALES_CLOUD_BOOTSTRAP_URL ||
       url === SESSION_API_ORIGIN ||
+      url === `${SESSION_API_ORIGIN}/` ||
       (
         url.startsWith(SESSION_API_ORIGIN) &&
         !url.startsWith(`${SESSION_API_ORIGIN}/oalcrm/web/`)
@@ -727,7 +572,7 @@ async function findExistingSalesCloudTabContext(requestContext) {
 async function waitForSalesCloudFrame(requestContext) {
   if (!requestContext.tabId || !requestContext.debug?.frameName) {
     throw new SalesCenterRequestError(
-      "Contexto do iframe SalesCloudSMC-GEC nÃ£o foi informado.",
+      "Contexto do iframe SalesCloudSMC-GEC não foi informado.",
       400,
       requestContext.debug,
     );
@@ -735,7 +580,6 @@ async function waitForSalesCloudFrame(requestContext) {
 
   const timeoutAt = Date.now() + 60000;
   let firstIncompleteAt = null;
-  let forcedStabilizationRefresh = false;
   let lastFrameId = null;
   let refreshCount = 0;
 
@@ -758,24 +602,20 @@ async function waitForSalesCloudFrame(requestContext) {
     );
 
     if (salesCloudFrame?.result?.readyState === "complete") {
-      if (!forcedStabilizationRefresh && refreshCount < SESSION_SALES_CLOUD_FRAME_MAX_REFRESHES) {
-        forcedStabilizationRefresh = true;
-        refreshCount += 1;
-        await refreshSalesCloudFrame(requestContext, {
-          href: salesCloudFrame.result.href,
-          reason: "first complete stabilization refresh",
-          refreshCount,
-        });
-        firstIncompleteAt = Date.now();
-        await delay(1000);
-        continue;
-      }
-
       requestContext.debug.sessionFrame = {
         frameId: salesCloudFrame.frameId,
         href: salesCloudFrame.result.href,
         readyState: salesCloudFrame.result.readyState,
       };
+      await waitForSalesCloudMountSettle(
+        requestContext,
+        requestContext.tabId,
+        salesCloudFrame.frameId,
+        {
+          href: salesCloudFrame.result.href,
+          source: "hidden iframe ready",
+        },
+      );
       return salesCloudFrame.frameId;
     }
 
@@ -815,10 +655,22 @@ async function waitForSalesCloudFrame(requestContext) {
   }
 
   throw new SalesCenterRequestError(
-    "Iframe SalesCloudSMC-GEC nÃ£o terminou de carregar.",
+    "Iframe SalesCloudSMC-GEC não terminou de carregar.",
     408,
     requestContext.debug,
   );
+}
+
+async function waitForSalesCloudMountSettle(requestContext, tabId, frameId, details = {}) {
+  const startedAt = Date.now();
+  await delay(SESSION_SALES_CLOUD_MOUNT_SETTLE_MS);
+  requestContext.debug.sessionRecovery.push({
+    ...details,
+    frameId,
+    settledForMs: Date.now() - startedAt,
+    step: "waitForSalesCloudMountSettle",
+    tabId,
+  });
 }
 
 async function refreshSalesCloudFrame(requestContext, details) {
@@ -840,6 +692,7 @@ async function refreshSalesCloudFrame(requestContext, details) {
         }
 
         frame.dataset.loaded = "false";
+        frame.dataset.sessionReady = "false";
         frame.src = src;
         return { refreshed: true, src };
       },
@@ -869,8 +722,8 @@ globalThis.SalesCenterBackgroundRuntime = {
   ensureSalesCloudExecutionContext,
   findExistingSalesCloudTabContext,
   prepareSalesCloudFrameStorageAccess,
-  probeSalesCloudApiReadyOnce,
   refreshSalesCloudFrame,
   refreshSalesCloudTab,
   warmSalesCloudSession,
+  waitForSalesCloudMountSettle,
 };

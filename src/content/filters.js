@@ -216,7 +216,7 @@ function renderTerritoryFilterOptions(state) {
     state.territoryFilterList.appendChild(
       createElement("div", {
         className: "sc-multiselect-empty",
-        text: "Nenhum territÃ³rio",
+        text: "Nenhum território",
       }),
     );
     syncTerritoryFilterControls(state);
@@ -275,32 +275,32 @@ function updateTerritoryFilterButtonLabel(state) {
   state.territoryFilterButton.removeAttribute("title");
 
   if (totalCount === 0) {
-    state.territoryFilterButton.textContent = "TerritÃ³rio: Carregando";
-    state.territoryFilterButton.setAttribute("aria-label", "Filtro de territÃ³rio carregando");
+    state.territoryFilterButton.textContent = "Território: Carregando";
+    state.territoryFilterButton.setAttribute("aria-label", "Filtro de território carregando");
     return;
   }
 
   if (selectedCount === 0) {
-    state.territoryFilterButton.textContent = "TerritÃ³rio: Nenhum";
-    state.territoryFilterButton.setAttribute("aria-label", "Filtro de territÃ³rio: nenhum");
+    state.territoryFilterButton.textContent = "Território: Nenhum";
+    state.territoryFilterButton.setAttribute("aria-label", "Filtro de território: nenhum");
     return;
   }
 
   if (selectedCount === 1) {
     const territoryName = selectedTerritories[0] || "-";
-    state.territoryFilterButton.textContent = `TerritÃ³rio: ${territoryName}`;
+    state.territoryFilterButton.textContent = `Território: ${territoryName}`;
     state.territoryFilterButton.setAttribute(
       "aria-label",
-      `Filtro de territÃ³rio: ${territoryName}`,
+      `Filtro de território: ${territoryName}`,
     );
     return;
   }
 
   state.territoryFilterButton.textContent =
-    selectedCount === totalCount ? "TerritÃ³rio: Todos" : `TerritÃ³rio: ${selectedCount}`;
+    selectedCount === totalCount ? "Território: Todos" : `Território: ${selectedCount}`;
   state.territoryFilterButton.setAttribute(
     "aria-label",
-    `Filtro de territÃ³rio: ${selectedCount} selecionados`,
+    `Filtro de território: ${selectedCount} selecionados`,
   );
   state.territoryFilterButton.setAttribute("title", selectedTerritories.join("\n"));
 }

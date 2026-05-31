@@ -68,6 +68,7 @@ function isRecoverableSessionError(error) {
     (
       error.code === "SESSION_HTML" ||
       error.code === "SESSION_HTTP" ||
+      error.code === "SESSION_BOOTSTRAP_NOT_READY" ||
       error.code === "SESSION_BOOTSTRAP_TIMEOUT" ||
       error.code === "SESSION_EXECUTION_UNAVAILABLE" ||
       error.status === 401 ||
@@ -81,8 +82,23 @@ function buildRequestErrorMessage(response, text) {
     return "Sessao gxpap-e.oracle.com indisponivel ou expirada.";
   }
 
+  if (response.status === 404 && looksLikeBootstrapNotReadyResponse(text)) {
+    return "SalesCloudSMC-GEC ainda nao terminou de montar a sessao.";
+  }
+
   const excerpt = text ? ` ${text.slice(0, 160)}` : "";
   return `Request falhou com HTTP ${response.status}.${excerpt}`;
+}
+
+function looksLikeBootstrapNotReadyResponse(text) {
+  const preparedText = String(text || "").slice(0, 500).toLowerCase();
+
+  return (
+    looksLikeHtmlResponse(text) ||
+    preparedText.includes("404") ||
+    preparedText.includes("not found") ||
+    preparedText.includes("cannot get")
+  );
 }
 
 globalThis.SalesCenterBackgroundRuntime = {
@@ -91,6 +107,7 @@ globalThis.SalesCenterBackgroundRuntime = {
   delay,
   isRecoverableSessionError,
   looksLikeHtmlResponse,
+  looksLikeBootstrapNotReadyResponse,
   looksLikeUnauthorizedPage,
   parseJsonResponse,
   prepareJsonText,

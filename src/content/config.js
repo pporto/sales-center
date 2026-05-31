@@ -105,7 +105,7 @@ const TABLE_COLUMNS = [
   },
   {
     key: "stage",
-    label: "ESTÃGIO",
+    label: "ESTÁGIO",
     aliases: ["salesStage", "salesStageName", "stage", "stageName"],
   },
   {

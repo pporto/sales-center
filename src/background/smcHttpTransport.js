@@ -32,14 +32,18 @@ function parseFetchJsonResponse(requestContext, label, url, response) {
   const text = response.text;
 
   if (!response.ok) {
+    const code = response.status === 404 && looksLikeBootstrapNotReadyResponse(text)
+      ? "SESSION_BOOTSTRAP_NOT_READY"
+      : response.status === 401 || response.status === 403
+        ? "SESSION_HTTP"
+        : "HTTP_ERROR";
+
     throw new SalesCenterRequestError(
       buildRequestErrorMessage(response, text),
       response.status,
       requestContext.debug,
       {
-        code: response.status === 401 || response.status === 403
-          ? "SESSION_HTTP"
-          : "HTTP_ERROR",
+        code,
         label,
       },
     );
@@ -71,62 +75,117 @@ async function retryFetchJsonWithAvailableSession(
   });
   await warmSalesCloudSession(requestContext);
 
-  const retryLabel = `${label}:frameRetry`;
-  recordRequestStart(requestContext.debug, retryLabel, url, options);
+  const preparedFrameResult = await retryFetchJsonInPreparedFrame(
+    requestContext,
+    label,
+    url,
+    options,
+    {
+      attempts: 3,
+      baseDelayMs: 700,
+      labelSuffix: "frameRetry",
+    },
+  );
 
-  try {
-    const retryResponse = await fetchJsonInSalesCloudFrame(requestContext, url, options);
-    recordRequestEnd(requestContext.debug, retryLabel, retryResponse);
-    return parseFetchJsonResponse(requestContext, label, url, retryResponse);
-  } catch (retryError) {
-    if (!isRecoverableSessionError(retryError)) {
-      throw retryError;
-    }
-
-    if (requestContext.temporarySalesCloudTabId) {
-      await createTemporarySalesCloudTabContext(requestContext, {
-        reason: retryError.message,
-      });
-
-      const refreshedRetryLabel = `${label}:temporaryTabRefreshRetry`;
-      recordRequestStart(requestContext.debug, refreshedRetryLabel, url, options);
-
-      try {
-        const refreshedRetryResponse = await fetchJsonInSalesCloudFrame(
-          requestContext,
-          url,
-          options,
-        );
-        recordRequestEnd(
-          requestContext.debug,
-          refreshedRetryLabel,
-          refreshedRetryResponse,
-        );
-        return parseFetchJsonResponse(
-          requestContext,
-          label,
-          url,
-          refreshedRetryResponse,
-        );
-      } catch (refreshedRetryError) {
-        if (!isRecoverableSessionError(refreshedRetryError)) {
-          throw refreshedRetryError;
-        }
-
-        requestContext.debug.sessionRecovery.push({
-          error: refreshedRetryError.message,
-          label,
-          step: "temporaryTabRefreshRetryFailed",
-        });
-      }
-    }
-
-    const extensionLabel = `${label}:extensionFetch`;
-    recordRequestStart(requestContext.debug, extensionLabel, url, options);
-    const extensionResponse = await fetchJsonInExtensionContext(url, options);
-    recordRequestEnd(requestContext.debug, extensionLabel, extensionResponse);
-    return parseFetchJsonResponse(requestContext, label, url, extensionResponse);
+  if (preparedFrameResult.ok) {
+    return preparedFrameResult.data;
   }
+
+  const retryError = preparedFrameResult.error;
+
+  if (!isRecoverableSessionError(retryError)) {
+    throw retryError;
+  }
+
+  if (requestContext.temporarySalesCloudTabId) {
+    await refreshSalesCloudTab(requestContext, requestContext.temporarySalesCloudTabId, {
+      href: requestContext.debug.executionContext?.href || null,
+      reason: retryError.message,
+    });
+    await createTemporarySalesCloudTabContext(requestContext, {
+      reason: retryError.message,
+    });
+    await warmSalesCloudSession(requestContext);
+
+    const refreshedFrameResult = await retryFetchJsonInPreparedFrame(
+      requestContext,
+      label,
+      url,
+      options,
+      {
+        attempts: 2,
+        baseDelayMs: 1000,
+        labelSuffix: "temporaryTabRefreshRetry",
+      },
+    );
+
+    if (refreshedFrameResult.ok) {
+      return refreshedFrameResult.data;
+    }
+
+    if (!isRecoverableSessionError(refreshedFrameResult.error)) {
+      throw refreshedFrameResult.error;
+    }
+
+    requestContext.debug.sessionRecovery.push({
+      error: refreshedFrameResult.error.message,
+      label,
+      step: "temporaryTabRefreshRetryFailed",
+    });
+  }
+
+  const extensionLabel = `${label}:extensionFetch`;
+  recordRequestStart(requestContext.debug, extensionLabel, url, options);
+  const extensionResponse = await fetchJsonInExtensionContext(url, options);
+  recordRequestEnd(requestContext.debug, extensionLabel, extensionResponse);
+  return parseFetchJsonResponse(requestContext, label, url, extensionResponse);
+}
+
+async function retryFetchJsonInPreparedFrame(
+  requestContext,
+  label,
+  url,
+  options,
+  retryOptions,
+) {
+  let lastError = null;
+  const attempts = Math.max(1, retryOptions.attempts || 1);
+  const baseDelayMs = Math.max(0, retryOptions.baseDelayMs || 0);
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const attemptLabel = `${label}:${retryOptions.labelSuffix}${attempt > 1 ? attempt : ""}`;
+    recordRequestStart(requestContext.debug, attemptLabel, url, options);
+
+    try {
+      const response = await fetchJsonInSalesCloudFrame(requestContext, url, options);
+      recordRequestEnd(requestContext.debug, attemptLabel, response);
+      return {
+        data: parseFetchJsonResponse(requestContext, label, url, response),
+        ok: true,
+      };
+    } catch (error) {
+      lastError = error;
+
+      if (!isRecoverableSessionError(error) || attempt === attempts) {
+        break;
+      }
+
+      requestContext.debug.sessionRecovery.push({
+        attempt,
+        error: error.message,
+        label,
+        nextDelayMs: baseDelayMs * attempt,
+        step: retryOptions.labelSuffix,
+      });
+      await delay(baseDelayMs * attempt);
+      await warmSalesCloudSession(requestContext);
+    }
+  }
+
+  return {
+    error: lastError,
+    ok: false,
+  };
 }
 
 async function fetchJsonInSalesCloudFrame(requestContext, url, options) {

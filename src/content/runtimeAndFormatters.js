@@ -11,7 +11,7 @@ function sendRuntimeMessage(message) {
       !chrome.runtime ||
       !chrome.runtime.sendMessage
     ) {
-      reject(new Error("Chrome runtime indisponÃ­vel para esta pÃ¡gina."));
+      reject(new Error("Chrome runtime indisponível para esta página."));
       return;
     }
 
@@ -29,58 +29,49 @@ function sendRuntimeMessage(message) {
 function waitForSessionFrameLoad(frame) {
   return new Promise((resolve, reject) => {
     if (!frame) {
-      reject(new Error("Iframe de sessÃ£o SalesCloud nÃ£o foi criado."));
+      reject(new Error("Iframe de sessão SalesCloud não foi criado."));
       return;
     }
 
-    if (frame.dataset.loaded === "true") {
+    if (frame.dataset.sessionReady === "true") {
       resolve();
       return;
     }
 
-    const refreshAfterMs = 12000;
-    const maxRefreshes = 2;
-    let forcedStabilizationRefresh = false;
-    let refreshCount = 0;
-    let refreshTimerId = null;
-    const scheduleRefresh = () => {
-      refreshTimerId = window.setTimeout(() => {
-        if (frame.dataset.loaded === "true") {
-          return;
-        }
+    const settleAfterLoadMs = 2500;
+    let settleTimerId = null;
+    let resolved = false;
 
-        if (refreshCount < maxRefreshes) {
-          refreshCount += 1;
-          frame.dataset.loaded = "false";
-          frame.src = SALES_CLOUD_REFERER;
-          scheduleRefresh();
-        }
-      }, refreshAfterMs);
+    const cleanup = () => {
+      frame.removeEventListener("load", handleLoad);
+      window.clearTimeout(settleTimerId);
+      window.clearTimeout(timeoutId);
     };
 
-    const timeoutId = window.setTimeout(() => {
-      frame.removeEventListener("load", handleLoad);
-      window.clearTimeout(refreshTimerId);
-      reject(new Error("Iframe SalesCloudSMC-GEC nÃ£o terminou de carregar."));
-    }, 60000);
-
-    const handleLoad = () => {
-      if (!forcedStabilizationRefresh && refreshCount < maxRefreshes) {
-        forcedStabilizationRefresh = true;
-        refreshCount += 1;
-        frame.dataset.loaded = "false";
-        frame.src = SALES_CLOUD_REFERER;
+    const finish = () => {
+      if (resolved) {
         return;
       }
 
-      frame.dataset.loaded = "true";
-      window.clearTimeout(refreshTimerId);
-      window.clearTimeout(timeoutId);
+      resolved = true;
+      frame.dataset.sessionReady = "true";
+      cleanup();
       resolve();
     };
 
-    frame.addEventListener("load", handleLoad, { once: true });
-    scheduleRefresh();
+    const timeoutId = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("Iframe SalesCloudSMC-GEC não terminou de carregar."));
+    }, 60000);
+
+    const handleLoad = () => {
+      settleTimerId = window.setTimeout(finish, settleAfterLoadMs);
+    };
+
+    frame.addEventListener("load", handleLoad);
+    if (frame.dataset.loadEventFired === "true") {
+      handleLoad();
+    }
   });
 }
 
@@ -254,4 +245,3 @@ function formatStatusText(value) {
 
   return String(value).trim().toUpperCase();
 }
-
