@@ -297,7 +297,6 @@ function getDefaultDashboardPreferences() {
     sellers: [],
     statusMode: "all",
     statuses: [...STATUS_FILTER_LABELS],
-    techCloudView: false,
     territoryIds: [],
     territoryMode: "first",
     visibleColumnKeys: [...DEFAULT_VISIBLE_COLUMN_KEYS],
@@ -351,7 +350,6 @@ function normalizeDashboardPreferences(preferences) {
     sellers: normalizePreferenceArray(preferences.sellers).map(String),
     statusMode: preferences.statusMode === "custom" ? "custom" : "all",
     statuses: statuses.length > 0 ? statuses : [...STATUS_FILTER_LABELS],
-    techCloudView: preferences.techCloudView === true,
     territoryIds: normalizePreferenceArray(preferences.territoryIds)
       .map((territoryId) => String(territoryId).trim())
       .filter(Boolean),
@@ -384,7 +382,6 @@ function saveDashboardPreferences(state) {
       ? "all"
       : "custom",
     statuses: getSelectedStatuses(state),
-    techCloudView: state.techCloudSwitch?.checked === true,
     territoryIds: Array.from(state.selectedTerritoryIds || []),
     territoryMode: state.territorySelectionMode || "all",
     visibleColumnKeys: Array.from(
@@ -615,13 +612,7 @@ function openSalesCenterDashboard() {
   });
   state.refreshButton.addEventListener("click", () => {
     if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
-      loadCurrentQuarter(state);
-    }
-  });
-  state.techCloudSwitch.addEventListener("change", () => {
-    saveDashboardPreferences(state);
-    if (isLoadableSalesCenterPeriod(state.periodSelect.value)) {
-      loadCurrentQuarter(state);
+      loadCurrentQuarter(state, { forceRefresh: true });
     }
   });
   state.bookingToggle.addEventListener("click", () => {
@@ -771,21 +762,6 @@ function renderDashboardShell(panel) {
   });
   const debugToggle = createToggleButton("Debug", false, "debug");
   debugToggle.hidden = true;
-  const techCloudSwitch = createElement("input", {
-    attributes: {
-      id: "sales-center-tech-cloud-view",
-      type: "checkbox",
-    },
-    className: "sc-switch-input",
-  });
-  const techCloudField = createElement("label", {
-    attributes: { for: "sales-center-tech-cloud-view" },
-    className: "sc-switch-field",
-  }, [
-    createElement("span", { className: "sc-switch-track" }),
-    createElement("span", { className: "sc-switch-label", text: "Tech Cloud View" }),
-  ]);
-  techCloudField.insertBefore(techCloudSwitch, techCloudField.firstChild);
   const bookingToggle = createToggleButton("Booking", true, "booking");
   const workloadsToggle = createToggleButton("Workloads", true, "workload");
   const workloadTypeGroup = createElement("div", {
@@ -927,12 +903,7 @@ function renderDashboardShell(panel) {
       text: "Período",
     }),
     periodSelect,
-    createElement("label", {
-      className: "sc-field",
-      text: "Território",
-    }),
     territoryFilterRoot,
-    techCloudField,
     workloadTypeGroup,
     sellerFilterRoot,
     statusFilterGroup,
@@ -1033,7 +1004,6 @@ function renderDashboardShell(panel) {
     tableBody,
     tableHead,
     tableState,
-    techCloudSwitch,
     tableWrap,
     themeToggleButton,
     topLoaderRequestId: null,
@@ -1087,7 +1057,6 @@ function applyDashboardPreferences(state, preferences) {
   const normalizedPreferences = normalizeDashboardPreferences(preferences);
   state.preferences = normalizedPreferences;
   state.periodSelect.value = normalizedPreferences.period;
-  state.techCloudSwitch.checked = normalizedPreferences.techCloudView;
   state.sellerSelectionMode = normalizedPreferences.sellerMode;
   state.territorySelectionMode = normalizedPreferences.territoryMode;
   state.selectedSellers = new Set(normalizedPreferences.sellers);
@@ -1546,7 +1515,7 @@ function renderLoading(state) {
   state.statusRegion.replaceChildren(
     createElement("div", {
       className: "sc-inline-status",
-      text: "Carregando forecast e oportunidades...",
+      text: "Carregando bookings e workloads...",
     }),
   );
   clearRevenueRequestInspector(state);
@@ -1595,7 +1564,7 @@ function isLoadableSalesCenterPeriod(period) {
   );
 }
 
-async function loadCurrentQuarter(state) {
+async function loadCurrentQuarter(state, options = {}) {
   if (state.availableTerritories.length > 0 && state.selectedTerritoryIds.size === 0) {
     renderNoTerritoriesSelected(state);
     return;
@@ -1610,9 +1579,9 @@ async function loadCurrentQuarter(state) {
     waitForSessionFrameLoad(state.sessionFrame).catch(() => null);
     const response = await sendRuntimeMessage({
       frameName: state.frameName,
+      forceRefresh: options.forceRefresh === true,
       period: state.periodSelect.value,
       progressRequestId: loadingRequestId,
-      techCloudView: state.techCloudSwitch.checked,
       territoryIds: Array.from(state.selectedTerritoryIds || []),
       type: "salesCenter.fetchCurrentQuarter",
     });

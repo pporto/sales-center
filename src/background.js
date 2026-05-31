@@ -22,6 +22,13 @@ const SALES_CLOUD_TAB_REFRESH_AFTER_MS = 10000;
 const SALES_CLOUD_TAB_MAX_REFRESHES = 8;
 const SALES_CLOUD_TAB_MAX_RECREATES = 2;
 const SALES_CLOUD_API_PROBE_AFTER_COMPLETE_MS = 2500;
+const SALES_CENTER_REQUEST_CACHE_STORAGE_KEY = "salesCenter.requestCache.v1";
+const SALES_CENTER_REQUEST_CACHE_TTL_MS = 9 * 60 * 60 * 1000;
+const SALES_CENTER_REQUEST_CACHE_MAX_ENTRIES = 20;
+
+const requestCacheMemory = new Map();
+const requestCacheInflight = new Map();
+let requestCacheGeneration = 0;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type !== "salesCenter.fetchCurrentQuarter") {
@@ -29,11 +36,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   fetchCurrentQuarter({
+    forceRefresh: message.forceRefresh === true,
     frameName: message.frameName,
     period: normalizePeriod(message.period),
     progressRequestId: message.progressRequestId || null,
     tabId: sender.tab?.id,
-    techCloudView: message.techCloudView === true,
     territoryIds: normalizeTerritoryIds(message.territoryIds),
   })
     .then((data) => sendResponse({ data, ok: true }))
@@ -60,6 +67,7 @@ async function fetchCurrentQuarter(sessionContext) {
     executionSource: null,
     executionTabId: null,
     frameId: null,
+    forceRefresh: sessionContext.forceRefresh === true,
     period: normalizePeriod(sessionContext.period),
     progressValue: 0,
     progressRequestId: sessionContext.progressRequestId || null,
@@ -67,8 +75,66 @@ async function fetchCurrentQuarter(sessionContext) {
     selectedTerritoryIds: normalizeTerritoryIds(sessionContext.territoryIds),
     tabId: sessionContext.tabId,
     temporarySalesCloudTabId: null,
-    techCloudView: sessionContext.techCloudView === true,
   };
+  const requestedCacheKey = createRequestCacheKey(
+    requestContext.period,
+    requestContext.selectedTerritoryIds,
+  );
+
+  if (requestContext.forceRefresh) {
+    publishProgress(requestContext, {
+      label: "Invalidando cache",
+      progress: 4,
+      stage: "cacheInvalidation",
+    });
+    await invalidateRequestCache();
+  } else {
+    const cachedEntry = await readRequestCacheEntry(requestedCacheKey);
+
+    if (cachedEntry) {
+      publishProgress(requestContext, {
+        cachedAt: cachedEntry.cachedAt,
+        expiresAt: cachedEntry.expiresAt,
+        label: "Usando cache de oportunidades",
+        progress: 96,
+        stage: "cache",
+      });
+      return createCachedDashboardData(cachedEntry, requestContext, requestedCacheKey);
+    }
+
+    const inFlightRequest = requestCacheInflight.get(requestedCacheKey);
+    if (inFlightRequest) {
+      publishProgress(requestContext, {
+        label: "Aguardando cache de oportunidades",
+        progress: 18,
+        stage: "cachePending",
+      });
+      return inFlightRequest;
+    }
+  }
+
+  const cacheGeneration = requestCacheGeneration;
+  const requestPromise = fetchCurrentQuarterFromSource(
+    requestContext,
+    requestedCacheKey,
+    cacheGeneration,
+  );
+  requestCacheInflight.set(requestedCacheKey, requestPromise);
+
+  try {
+    return await requestPromise;
+  } finally {
+    if (requestCacheInflight.get(requestedCacheKey) === requestPromise) {
+      requestCacheInflight.delete(requestedCacheKey);
+    }
+  }
+}
+
+async function fetchCurrentQuarterFromSource(
+  requestContext,
+  requestedCacheKey,
+  cacheGeneration,
+) {
   try {
     publishProgress(requestContext, {
       label: "Preparando sessao",
@@ -128,7 +194,7 @@ async function fetchCurrentQuarter(sessionContext) {
       forecast,
     );
 
-    return {
+    const data = {
       debug: requestContext.debug,
       forecast,
       forecastActiveOptions,
@@ -139,9 +205,206 @@ async function fetchCurrentQuarter(sessionContext) {
       period: requestContext.period,
       selectedTerritoryIds,
     };
+
+    if (cacheGeneration === requestCacheGeneration) {
+      await writeRequestCacheEntry(requestedCacheKey, data);
+
+      const resolvedCacheKey = createRequestCacheKey(
+        requestContext.period,
+        selectedTerritoryIds,
+      );
+      if (resolvedCacheKey !== requestedCacheKey) {
+        await writeRequestCacheEntry(resolvedCacheKey, data);
+      }
+    }
+
+    return data;
   } finally {
     await closeTemporarySalesCloudTab(requestContext);
   }
+}
+
+function createRequestCacheKey(period, territoryIds) {
+  const normalizedTerritoryIds = normalizeTerritoryIds(territoryIds)
+    .sort((territoryIdA, territoryIdB) => territoryIdA.localeCompare(territoryIdB));
+  const keyParts = [
+    "v1",
+    getCurrentYear(),
+    REQUEST_VERSION_SUFFIX,
+    normalizePeriod(period),
+    normalizedTerritoryIds.length ? normalizedTerritoryIds.join(",") : "default",
+  ];
+
+  return keyParts.map((keyPart) => encodeURIComponent(keyPart)).join("|");
+}
+
+async function readRequestCacheEntry(cacheKey) {
+  const now = Date.now();
+  const memoryEntry = requestCacheMemory.get(cacheKey);
+
+  if (isRequestCacheEntryFresh(memoryEntry, now)) {
+    return memoryEntry;
+  }
+
+  if (memoryEntry) {
+    requestCacheMemory.delete(cacheKey);
+  }
+
+  const cacheStore = await readRequestCacheStore();
+  const storageEntry = cacheStore.entries[cacheKey] || null;
+
+  if (isRequestCacheEntryFresh(storageEntry, now)) {
+    requestCacheMemory.set(cacheKey, storageEntry);
+    return storageEntry;
+  }
+
+  if (storageEntry) {
+    delete cacheStore.entries[cacheKey];
+    await writeRequestCacheStore(cacheStore);
+  }
+
+  return null;
+}
+
+async function writeRequestCacheEntry(cacheKey, data) {
+  const now = Date.now();
+  const entry = {
+    cachedAt: new Date(now).toISOString(),
+    data: createCacheableDashboardData(data),
+    expiresAt: new Date(now + SALES_CENTER_REQUEST_CACHE_TTL_MS).toISOString(),
+    expiresAtMs: now + SALES_CENTER_REQUEST_CACHE_TTL_MS,
+  };
+
+  requestCacheMemory.set(cacheKey, entry);
+
+  const cacheStore = await readRequestCacheStore();
+  cacheStore.entries[cacheKey] = entry;
+  cacheStore.entries = pruneRequestCacheEntries(cacheStore.entries, now);
+  await writeRequestCacheStore(cacheStore);
+}
+
+async function invalidateRequestCache() {
+  requestCacheGeneration += 1;
+  requestCacheMemory.clear();
+  requestCacheInflight.clear();
+  await writeRequestCacheStore(createEmptyRequestCacheStore());
+}
+
+function createCacheableDashboardData(data) {
+  const {
+    debug,
+    ...cacheableData
+  } = data || {};
+
+  return cacheableData;
+}
+
+function createCachedDashboardData(cacheEntry, requestContext, cacheKey) {
+  return {
+    ...cacheEntry.data,
+    cache: {
+      cachedAt: cacheEntry.cachedAt,
+      expiresAt: cacheEntry.expiresAt,
+      hit: true,
+      key: cacheKey,
+    },
+    debug: createCachedDebugState(requestContext, cacheEntry, cacheKey),
+  };
+}
+
+function createCachedDebugState(requestContext, cacheEntry, cacheKey) {
+  return {
+    ...createDebugState({
+      frameName: requestContext.debug?.frameName,
+      period: requestContext.period,
+    }),
+    cache: {
+      cachedAt: cacheEntry.cachedAt,
+      expiresAt: cacheEntry.expiresAt,
+      hit: true,
+      key: cacheKey,
+    },
+  };
+}
+
+function isRequestCacheEntryFresh(entry, now = Date.now()) {
+  if (!entry || !entry.data) {
+    return false;
+  }
+
+  return getRequestCacheEntryExpiresAtMs(entry) > now;
+}
+
+function getRequestCacheEntryExpiresAtMs(entry) {
+  if (Number.isFinite(entry?.expiresAtMs)) {
+    return entry.expiresAtMs;
+  }
+
+  const parsedExpiresAt = Date.parse(entry?.expiresAt || "");
+  return Number.isFinite(parsedExpiresAt) ? parsedExpiresAt : 0;
+}
+
+async function readRequestCacheStore() {
+  if (!chrome.storage?.local) {
+    return createEmptyRequestCacheStore();
+  }
+
+  return new Promise((resolve) => {
+    chrome.storage.local.get([SALES_CENTER_REQUEST_CACHE_STORAGE_KEY], (result) => {
+      if (chrome.runtime.lastError) {
+        resolve(createEmptyRequestCacheStore());
+        return;
+      }
+
+      const cacheStore = result?.[SALES_CENTER_REQUEST_CACHE_STORAGE_KEY];
+      if (!cacheStore || typeof cacheStore !== "object") {
+        resolve(createEmptyRequestCacheStore());
+        return;
+      }
+
+      resolve({
+        entries: cacheStore.entries && typeof cacheStore.entries === "object"
+          ? cacheStore.entries
+          : {},
+        version: 1,
+      });
+    });
+  });
+}
+
+async function writeRequestCacheStore(cacheStore) {
+  if (!chrome.storage?.local) {
+    return;
+  }
+
+  await new Promise((resolve) => {
+    chrome.storage.local.set({
+      [SALES_CENTER_REQUEST_CACHE_STORAGE_KEY]: {
+        entries: cacheStore.entries || {},
+        version: 1,
+      },
+    }, () => {
+      resolve();
+    });
+  });
+}
+
+function createEmptyRequestCacheStore() {
+  return {
+    entries: {},
+    version: 1,
+  };
+}
+
+function pruneRequestCacheEntries(entries, now = Date.now()) {
+  const freshEntries = Object.entries(entries || {})
+    .filter(([, entry]) => isRequestCacheEntryFresh(entry, now))
+    .sort((entryA, entryB) =>
+      Date.parse(entryB[1].cachedAt || "") - Date.parse(entryA[1].cachedAt || ""),
+    )
+    .slice(0, SALES_CENTER_REQUEST_CACHE_MAX_ENTRIES);
+
+  return Object.fromEntries(freshEntries);
 }
 
 async function requestForecastActive(requestContext) {
@@ -481,7 +744,6 @@ async function requestRevenueItems(requestContext, forecast, offset) {
       createRevenuePayload(forecast, offset, {
         renewalForecast: requestContext.renewalForecast,
         selectedTerritoryIds: requestContext.selectedTerritoryIds,
-        techCloudView: requestContext.techCloudView,
       }),
     ),
     headers: {
@@ -657,9 +919,6 @@ function createRevenuePayload(forecast, offset, options = {}) {
     licenseSAAS: [],
     limit: REVENUE_PAGE_LIMIT,
     months: [],
-    ...(options.techCloudView
-      ? { optyType: ["TECH_CLOUD_CONSUMPTION"] }
-      : {}),
     myDirectsResourcesMinusOne: [],
     myDirectsResourcesMinusTwo: [],
     myDirectsTerritoriesMinusOne: [],
@@ -1807,7 +2066,6 @@ function createDebugState(sessionContext) {
     revenueExtraction: [],
     sessionRecovery: [],
     sessionStrategy: "existing tab, hidden iframe, then temporary inactive SalesCloud tab",
-    techCloudView: sessionContext.techCloudView === true,
   };
 }
 
