@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Sales Center",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Adiciona o atalho Sales Center ao Oracle Fusion HCM.",
   "action": {
     "default_title": "Sales Center",
